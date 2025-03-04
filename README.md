@@ -109,6 +109,9 @@ Add this configuration (replace `mint.yourdomain.com` with your actual domain):
 
 ```
 mint.yourdomain.com {
+    # Configure TLS with your email for certificate notifications
+    tls your-email@example.com
+
     reverse_proxy localhost:3500
 
     # Optional: Add security headers

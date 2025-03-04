@@ -51,7 +51,7 @@ function encodeToken(token, customPrefix) {
  */
 function decodeToken(encodedToken) {
   try {
-    // Get default prefix
+    // Get default prefix from config
     const defaultPrefix = getTokenPrefix();
     
     // Make sure the token starts with some kind of prefix
@@ -59,18 +59,35 @@ function decodeToken(encodedToken) {
     let base64Token;
     
     if (encodedToken.startsWith(defaultPrefix)) {
-      // Default prefix
+      // Default prefix from config
       base64Token = encodedToken.slice(defaultPrefix.length);
     } else {
-      // Try to extract the prefix and token
-      // Look for the point where base64-valid characters start
-      const prefixEndIndex = encodedToken.search(/[A-Za-z0-9\-_]/);
+      // Find the first occurrence of a base64 character
+      // This allows any prefix to be used without hardcoding specific values
+      // Check for all characters used in URL-safe base64: A-Z, a-z, 0-9, -, _
+      let prefixEndIndex = -1;
+      for (let i = 0; i < encodedToken.length; i++) {
+        const char = encodedToken[i];
+        if ((char >= 'A' && char <= 'Z') || 
+            (char >= 'a' && char <= 'z') || 
+            (char >= '0' && char <= '9') ||
+            char === '-' || char === '_') {
+          prefixEndIndex = i;
+          break;
+        }
+      }
       
       if (prefixEndIndex === -1) {
         throw new Error('Invalid token format');
       }
       
-      base64Token = encodedToken.slice(prefixEndIndex);
+      // Check if the rest of the string only contains valid base64url chars
+      const potentialBase64 = encodedToken.slice(prefixEndIndex);
+      if (!/^[A-Za-z0-9\-_]+$/.test(potentialBase64)) {
+        throw new Error('Invalid token format: contains non-base64url characters');
+      }
+      
+      base64Token = potentialBase64;
     }
     
     // Restore the URL-safe base64 to regular base64
