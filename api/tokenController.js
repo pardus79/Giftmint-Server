@@ -173,20 +173,36 @@ async function verifyToken(req, res) {
       });
     }
     
+    console.log('Received token for verification:', token);
+    console.log('Token type:', typeof token);
+    
     // Parse token - support both compact and raw JSON formats
     let parsedToken;
     try {
-      if (token.startsWith('giftmint')) {
+      // Check if the token is a compact format with any prefix
+      if (typeof token === 'string' && 
+          (token.startsWith('giftmint') || 
+           token.startsWith('btcpins') || 
+           token.startsWith(config.token.prefix))) {
+        console.log('Detected compact token format with prefix');
         // Compact token format
         parsedToken = decodeToken(token);
-      } else {
+      } else if (typeof token === 'string' && token.startsWith('{')) {
+        console.log('Detected JSON format token');
         // Legacy JSON format
         parsedToken = JSON.parse(token);
+      } else {
+        console.log('Attempting to decode with generic approach');
+        // Try generic approach
+        parsedToken = decodeToken(token);
       }
+      
+      console.log('Successfully parsed token:', parsedToken);
     } catch (e) {
+      console.log('Error parsing token:', e.message);
       return res.status(400).json({
         success: false,
-        message: 'Invalid token format'
+        message: 'Invalid token format: ' + e.message
       });
     }
     
