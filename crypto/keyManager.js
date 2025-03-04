@@ -89,15 +89,29 @@ async function init() {
 async function createDefaultDenominations() {
   const db = getDb();
   
-  // Define default denominations
+  // Define default denominations (powers of 2)
   const defaultDenominations = [
     { id: uuidv4(), value: 1, currency: 'SATS', description: '1 Satoshi' },
-    { id: uuidv4(), value: 10, currency: 'SATS', description: '10 Satoshis' },
-    { id: uuidv4(), value: 100, currency: 'SATS', description: '100 Satoshis' },
-    { id: uuidv4(), value: 1000, currency: 'SATS', description: '1,000 Satoshis' },
-    { id: uuidv4(), value: 10000, currency: 'SATS', description: '10,000 Satoshis' },
-    { id: uuidv4(), value: 100000, currency: 'SATS', description: '100,000 Satoshis' },
-    { id: uuidv4(), value: 1000000, currency: 'SATS', description: '1,000,000 Satoshis' }
+    { id: uuidv4(), value: 2, currency: 'SATS', description: '2 Satoshis' },
+    { id: uuidv4(), value: 4, currency: 'SATS', description: '4 Satoshis' },
+    { id: uuidv4(), value: 8, currency: 'SATS', description: '8 Satoshis' },
+    { id: uuidv4(), value: 16, currency: 'SATS', description: '16 Satoshis' },
+    { id: uuidv4(), value: 32, currency: 'SATS', description: '32 Satoshis' },
+    { id: uuidv4(), value: 64, currency: 'SATS', description: '64 Satoshis' },
+    { id: uuidv4(), value: 128, currency: 'SATS', description: '128 Satoshis' },
+    { id: uuidv4(), value: 256, currency: 'SATS', description: '256 Satoshis' },
+    { id: uuidv4(), value: 512, currency: 'SATS', description: '512 Satoshis' },
+    { id: uuidv4(), value: 1024, currency: 'SATS', description: '1,024 Satoshis' },
+    { id: uuidv4(), value: 2048, currency: 'SATS', description: '2,048 Satoshis' },
+    { id: uuidv4(), value: 4096, currency: 'SATS', description: '4,096 Satoshis' },
+    { id: uuidv4(), value: 8192, currency: 'SATS', description: '8,192 Satoshis' },
+    { id: uuidv4(), value: 16384, currency: 'SATS', description: '16,384 Satoshis' },
+    { id: uuidv4(), value: 32768, currency: 'SATS', description: '32,768 Satoshis' },
+    { id: uuidv4(), value: 65536, currency: 'SATS', description: '65,536 Satoshis' },
+    { id: uuidv4(), value: 131072, currency: 'SATS', description: '131,072 Satoshis' },
+    { id: uuidv4(), value: 262144, currency: 'SATS', description: '262,144 Satoshis' },
+    { id: uuidv4(), value: 524288, currency: 'SATS', description: '524,288 Satoshis' },
+    { id: uuidv4(), value: 1048576, currency: 'SATS', description: '1,048,576 Satoshis' }
   ];
   
   // Insert default denominations

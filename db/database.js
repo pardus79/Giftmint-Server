@@ -179,18 +179,31 @@ async function createTables() {
       table.string('original_token_id').notNullable();
       table.string('original_denomination_id').notNullable();
       table.string('redeemed_denomination_id').notNullable(); // Smaller denomination that was actually redeemed
-      table.string('change_token_id').notNullable(); // The change token that was created
-      table.string('change_denomination_id').notNullable(); // The denomination of the change token
       table.timestamp('created_at').defaultTo(db.fn.now());
       table.index(['original_token_id']);
-      table.index(['change_token_id']);
       table.foreign('original_token_id').references('tokens.id');
-      table.foreign('change_token_id').references('tokens.id');
       table.foreign('original_denomination_id').references('denominations.id');
       table.foreign('redeemed_denomination_id').references('denominations.id');
-      table.foreign('change_denomination_id').references('denominations.id');
     });
     logger.info('Created split_redemptions table');
+  }
+  
+  // Create table for change tokens from splits (for multiple change tokens)
+  const hasChangeTokensTable = await db.schema.hasTable('change_tokens');
+  if (!hasChangeTokensTable) {
+    await db.schema.createTable('change_tokens', function(table) {
+      table.increments('id').primary();
+      table.string('split_id').notNullable(); // References split_redemptions.id
+      table.string('token_id').notNullable(); // The change token that was created
+      table.string('denomination_id').notNullable(); // The denomination of the change token
+      table.timestamp('created_at').defaultTo(db.fn.now());
+      table.index(['split_id']);
+      table.index(['token_id']);
+      table.foreign('split_id').references('split_redemptions.id');
+      table.foreign('token_id').references('tokens.id');
+      table.foreign('denomination_id').references('denominations.id');
+    });
+    logger.info('Created change_tokens table');
   }
 }
 
