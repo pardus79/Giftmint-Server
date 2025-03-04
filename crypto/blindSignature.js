@@ -34,38 +34,24 @@ function generateBlindingFactor() {
 /**
  * Generate a new token
  * 
- * @param {number} amount - Token amount
- * @param {string} currency - Token currency
- * @param {string} [batchId] - Optional batch ID
- * @returns {Object} Token object with id, amount, currency, batchId, tokenData, blindingFactor
+ * @returns {Object} Token object with random value and blinding factor
  */
-function generateToken(amount, currency, batchId = '') {
+function generateToken() {
   try {
-    // Validate inputs
-    if (!amount || isNaN(amount) || amount <= 0) {
-      throw new Error('Invalid amount');
-    }
-    
-    if (!currency) {
-      throw new Error('Currency is required');
-    }
-    
-    // Generate token ID
+    // Generate token ID (purely random)
     const id = uuidv4();
     
-    // Generate token data
-    const tokenData = {
-      id,
-      amount: new Decimal(amount).toString(),
-      currency,
-      batchId,
-      createdAt: new Date().toISOString()
-    };
+    // Generate completely random token data - no metadata included
+    // This is the true Chaumian way - the token itself contains no information
+    // about its value or origin
     
     // Generate blinding factor
     const blindingFactor = generateBlindingFactor();
     
-    // JSON stringify and normalize token data
+    // Create token data from just the random ID - no metadata
+    const tokenData = { id };
+    
+    // JSON stringify token data
     const tokenString = JSON.stringify(tokenData);
     
     // Create a buffer from the token string
@@ -73,9 +59,6 @@ function generateToken(amount, currency, batchId = '') {
     
     return {
       id,
-      amount,
-      currency,
-      batchId,
       tokenData: tokenString,
       tokenBuffer,
       blindingFactor
@@ -235,16 +218,14 @@ function verifySignature(message, signature, publicKeyPem) {
 /**
  * Create a complete token for e-cash
  * 
- * @param {number} amount - Token amount
- * @param {string} currency - Token currency
+ * @param {string} denominationId - The ID of the denomination (key) to use
  * @param {string} publicKeyPem - Public key in PEM format
- * @param {string} [batchId] - Optional batch ID
  * @returns {Object} Token object with all necessary data
  */
-function createTokenRequest(amount, currency, publicKeyPem, batchId = '') {
+function createTokenRequest(denominationId, publicKeyPem) {
   try {
-    // Generate token
-    const token = generateToken(amount, currency, batchId);
+    // Generate token (purely random, no metadata)
+    const token = generateToken();
     
     // Create token hash (what will actually be signed)
     const tokenHash = crypto.createHash('sha256')
@@ -276,13 +257,11 @@ function createTokenRequest(amount, currency, publicKeyPem, batchId = '') {
     
     return {
       id: token.id,
-      amount: token.amount,
-      currency: token.currency,
-      batchId: token.batchId,
       blindedToken: blindedMessage.toString('base64'),
       blindingFactor: blindingFactor.toString('base64'),
       tokenData: token.tokenData,
-      hashAlgo: hashToUse.length === 20 ? 'sha1' : 'sha256' // Keep track of which hash we used
+      hashAlgo: hashToUse.length === 20 ? 'sha1' : 'sha256', // Keep track of which hash we used
+      denominationId // Store which denomination (key) this token uses
     };
   } catch (error) {
     logger.error({ error }, 'Failed to create token request');
@@ -331,13 +310,13 @@ function processSignedToken(tokenRequest, blindSignature, publicKeyPem) {
       throw new Error('Invalid signature');
     }
     
-    // Create final token with encoded signature
+    // Create final token with encoded signature - in true Chaumian fashion,
+    // it contains only the random data and signature, nothing about its value
     return {
       id: tokenRequest.id,
-      amount: tokenRequest.amount,
-      currency: tokenRequest.currency,
       signature: signature.toString('base64'),
-      data: tokenRequest.tokenData
+      data: tokenRequest.tokenData,
+      denominationId: tokenRequest.denominationId
     };
   } catch (error) {
     logger.error({ error }, 'Failed to process signed token');

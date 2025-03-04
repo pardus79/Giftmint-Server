@@ -104,15 +104,30 @@ function getDbConfig() {
  * Create database tables
  */
 async function createTables() {
+  const hasDenominationsTable = await db.schema.hasTable('denominations');
+  if (!hasDenominationsTable) {
+    await db.schema.createTable('denominations', function(table) {
+      table.string('id').primary();
+      table.decimal('value', 15, 8).notNullable();
+      table.string('currency').notNullable();
+      table.text('description').nullable();
+      table.timestamp('created_at').defaultTo(db.fn.now());
+      table.boolean('is_active').defaultTo(true);
+    });
+    logger.info('Created denominations table');
+  }
+  
   const hasKeyTable = await db.schema.hasTable('mint_keys');
   if (!hasKeyTable) {
     await db.schema.createTable('mint_keys', function(table) {
       table.string('id').primary();
+      table.string('denomination_id').notNullable();
       table.text('public_key').notNullable();
       table.text('private_key').notNullable();
       table.timestamp('created_at').defaultTo(db.fn.now());
       table.timestamp('expires_at').notNullable();
       table.boolean('is_active').defaultTo(true);
+      table.foreign('denomination_id').references('denominations.id');
     });
     logger.info('Created mint_keys table');
   }
@@ -121,19 +136,20 @@ async function createTables() {
   if (!hasTokenTable) {
     await db.schema.createTable('tokens', function(table) {
       table.string('id').primary();
-      table.decimal('amount', 15, 8).notNullable();
-      table.string('currency').notNullable();
-      table.string('key_id').notNullable();
+      table.string('denomination_id').notNullable(); // Link to which denomination (value) this token has
+      table.string('key_id').notNullable(); // Which specific key signed this token
       table.text('blinded_token').notNullable();
       table.text('signed_token');
       table.string('status').defaultTo('pending'); // pending, active, redeemed, expired
-      table.string('batch_id');
       table.timestamp('created_at').defaultTo(db.fn.now());
       table.timestamp('updated_at').defaultTo(db.fn.now());
       table.timestamp('expires_at');
       table.timestamp('redeemed_at');
-      table.index(['status', 'batch_id']);
+      table.index(['status']);
       table.index(['key_id']);
+      table.index(['denomination_id']);
+      table.foreign('key_id').references('mint_keys.id');
+      table.foreign('denomination_id').references('denominations.id');
     });
     logger.info('Created tokens table');
   }
@@ -143,15 +159,38 @@ async function createTables() {
     await db.schema.createTable('redemptions', function(table) {
       table.increments('id').primary();
       table.string('token_id').notNullable();
-      table.decimal('amount', 15, 8).notNullable();
-      table.string('currency').notNullable();
-      table.string('status').defaultTo('completed'); // completed, partial
-      table.decimal('remaining_amount', 15, 8).defaultTo(0);
-      table.string('change_token_id');
+      table.string('denomination_id').notNullable(); // Which denomination was redeemed
+      table.string('status').defaultTo('completed'); // completed, split
+      table.string('change_token_id'); // If split redemption, ID of the change token
       table.timestamp('created_at').defaultTo(db.fn.now());
       table.index(['token_id']);
+      table.index(['denomination_id']);
+      table.foreign('token_id').references('tokens.id');
+      table.foreign('denomination_id').references('denominations.id');
     });
     logger.info('Created redemptions table');
+  }
+  
+  // Create the split redemptions table
+  const hasSplitRedemptionTable = await db.schema.hasTable('split_redemptions');
+  if (!hasSplitRedemptionTable) {
+    await db.schema.createTable('split_redemptions', function(table) {
+      table.increments('id').primary();
+      table.string('original_token_id').notNullable();
+      table.string('original_denomination_id').notNullable();
+      table.string('redeemed_denomination_id').notNullable(); // Smaller denomination that was actually redeemed
+      table.string('change_token_id').notNullable(); // The change token that was created
+      table.string('change_denomination_id').notNullable(); // The denomination of the change token
+      table.timestamp('created_at').defaultTo(db.fn.now());
+      table.index(['original_token_id']);
+      table.index(['change_token_id']);
+      table.foreign('original_token_id').references('tokens.id');
+      table.foreign('change_token_id').references('tokens.id');
+      table.foreign('original_denomination_id').references('denominations.id');
+      table.foreign('redeemed_denomination_id').references('denominations.id');
+      table.foreign('change_denomination_id').references('denominations.id');
+    });
+    logger.info('Created split_redemptions table');
   }
 }
 
