@@ -23,6 +23,35 @@ const logger = pino({
 });
 
 /**
+ * List available denominations
+ * 
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
+async function listDenominations(req, res) {
+  try {
+    const db = getDb();
+    
+    // Get all active denominations
+    const denominations = await db('denominations')
+      .where('is_active', true)
+      .orderBy('value', 'asc');
+    
+    res.status(200).json({
+      success: true,
+      denominations: denominations
+    });
+  } catch (error) {
+    logger.error({ error }, 'Failed to list denominations');
+    res.status(500).json({
+      success: false,
+      message: 'Failed to list denominations',
+      error: error.message
+    });
+  }
+}
+
+/**
  * Create a new token
  * 
  * @param {Object} req - Express request object
@@ -30,44 +59,40 @@ const logger = pino({
  */
 async function createToken(req, res) {
   try {
-    const { amount, currency, batch_id } = req.body;
+    const { denomination_id, denomination_value } = req.body;
     
-    // Validate inputs
-    if (!amount || isNaN(amount) || amount <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid amount'
-      });
+    let keyPair;
+    let denomination;
+    
+    // Get key pair based on either denomination_id or denomination_value
+    if (denomination_id) {
+      // Get key pair for specific denomination ID
+      keyPair = await keyManager.getKeyPairForDenomination(denomination_id);
+      denomination = await keyManager.getDenomination(keyPair.denominationId);
+    } else if (denomination_value) {
+      // Try to find denomination by value
+      keyPair = await keyManager.getKeyPairForDenomination(denomination_value);
+      denomination = await keyManager.getDenomination(keyPair.denominationId);
+    } else {
+      // Get default (smallest) denomination key pair
+      keyPair = await keyManager.getActiveKeyPair();
+      denomination = await keyManager.getDenomination(keyPair.denominationId);
     }
     
-    if (!currency) {
-      return res.status(400).json({
-        success: false,
-        message: 'Currency is required'
-      });
-    }
-    
-    // Get active key pair
-    const keyPair = await keyManager.getActiveKeyPair();
-    
-    // Create token request
+    // Create token request (properly blind, with no metadata)
     const tokenRequest = blindSignature.createTokenRequest(
-      parseFloat(amount),
-      currency,
-      keyPair.publicKey,
-      batch_id || ''
+      keyPair.denominationId,
+      keyPair.publicKey
     );
     
-    // Store token in database
+    // Store token in database (no amount/currency in token itself, just the denomination link)
     const db = getDb();
     await db('tokens').insert({
       id: tokenRequest.id,
-      amount: new Decimal(amount).toNumber(),
-      currency: currency,
+      denomination_id: keyPair.denominationId,
       key_id: keyPair.id,
       blinded_token: tokenRequest.blindedToken,
       status: 'pending',
-      batch_id: batch_id || null,
       created_at: new Date(),
       updated_at: new Date(),
       expires_at: new Date(Date.now() + config.crypto.tokenExpiry * 1000)
@@ -86,8 +111,7 @@ async function createToken(req, res) {
         updated_at: new Date()
       });
     
-    // Process the signed token 
-    // Ensure tokenRequest has hashAlgo property if the original didn't include it
+    // Process the signed token
     if (!tokenRequest.hashAlgo) {
       tokenRequest.hashAlgo = 'sha256'; // Default for backwards compatibility
     }
@@ -98,14 +122,21 @@ async function createToken(req, res) {
       keyPair.publicKey
     );
     
-    // Return token
+    // Return token (in true Chaumian fashion, just the blind signature with no metadata)
     res.status(200).json({
       success: true,
       token: JSON.stringify({
         data: finishedToken.data,
         signature: finishedToken.signature,
         key_id: keyPair.id
-      })
+      }),
+      // Send denomination info separately, not embedded in the token
+      denomination: {
+        id: denomination.id,
+        value: denomination.value,
+        currency: denomination.currency,
+        description: denomination.description
+      }
     });
   } catch (error) {
     logger.error({ error }, 'Failed to create token');
@@ -170,6 +201,9 @@ async function verifyToken(req, res) {
     // Get key pair by ID
     const keyPair = await keyManager.getKeyPairById(key_id);
     
+    // Get denomination info
+    const denomination = await keyManager.getDenomination(keyPair.denominationId);
+    
     // Recreate the token hash
     const tokenHash = require('crypto')
       .createHash('sha256')
@@ -203,12 +237,18 @@ async function verifyToken(req, res) {
       });
     }
     
-    // Return token data
+    // Return token verification with denomination details
+    // (Denomination info is returned separately, not embedded in the token)
     res.status(200).json({
       success: true,
-      amount: tokenData.amount,
-      currency: tokenData.currency,
-      value: tokenData.amount
+      valid: true,
+      token_id: tokenData.id,
+      denomination: {
+        id: denomination.id,
+        value: denomination.value,
+        currency: denomination.currency,
+        description: denomination.description
+      }
     });
   } catch (error) {
     logger.error({ error }, 'Failed to verify token');
@@ -228,7 +268,7 @@ async function verifyToken(req, res) {
  */
 async function redeemToken(req, res) {
   try {
-    const { token, amount } = req.body;
+    const { token } = req.body;
     
     // Validate input
     if (!token) {
@@ -273,6 +313,9 @@ async function redeemToken(req, res) {
     // Get key pair by ID
     const keyPair = await keyManager.getKeyPairById(key_id);
     
+    // Get denomination info
+    const denomination = await keyManager.getDenomination(keyPair.denominationId);
+    
     // Recreate the token hash
     const tokenHash = require('crypto')
       .createHash('sha256')
@@ -315,84 +358,14 @@ async function redeemToken(req, res) {
       if (!storedToken) {
         await trx('tokens').insert({
           id: tokenData.id,
-          amount: new Decimal(tokenData.amount).toNumber(),
-          currency: tokenData.currency,
+          denomination_id: keyPair.denominationId,
           key_id: key_id,
           blinded_token: '',
           signed_token: signature,
           status: 'pending',
-          batch_id: tokenData.batchId || null,
-          created_at: new Date(tokenData.createdAt),
-          updated_at: new Date(),
-          expires_at: new Date(Date.now() + config.crypto.tokenExpiry * 1000)
-        });
-      }
-      
-      // Calculate redemption amount
-      const tokenAmount = new Decimal(tokenData.amount);
-      let redemptionAmount = tokenAmount;
-      let changeAmount = new Decimal(0);
-      let changeToken = null;
-      
-      // Handle partial redemption
-      if (amount && parseFloat(amount) > 0 && parseFloat(amount) < tokenAmount.toNumber()) {
-        redemptionAmount = new Decimal(amount);
-        changeAmount = tokenAmount.minus(redemptionAmount);
-        
-        // Create change token
-        const activeKeyPair = await keyManager.getActiveKeyPair();
-        
-        const changeTokenRequest = blindSignature.createTokenRequest(
-          changeAmount.toNumber(),
-          tokenData.currency,
-          activeKeyPair.publicKey,
-          tokenData.batchId || ''
-        );
-        
-        // Store change token in database
-        await trx('tokens').insert({
-          id: changeTokenRequest.id,
-          amount: changeAmount.toNumber(),
-          currency: tokenData.currency,
-          key_id: activeKeyPair.id,
-          blinded_token: changeTokenRequest.blindedToken,
-          status: 'pending',
-          batch_id: tokenData.batchId || null,
           created_at: new Date(),
           updated_at: new Date(),
           expires_at: new Date(Date.now() + config.crypto.tokenExpiry * 1000)
-        });
-        
-        // Sign the blinded token
-        const blindedTokenBuffer = Buffer.from(changeTokenRequest.blindedToken, 'base64');
-        const changeSignature = blindSignature.signBlindedMessage(blindedTokenBuffer, activeKeyPair.privateKey);
-        
-        // Update token status in database
-        await trx('tokens')
-          .where('id', changeTokenRequest.id)
-          .update({
-            signed_token: changeSignature.toString('base64'),
-            status: 'active',
-            updated_at: new Date()
-          });
-        
-        // Process the signed token
-        // Ensure tokenRequest has hashAlgo property if the original didn't include it
-        if (!changeTokenRequest.hashAlgo) {
-          changeTokenRequest.hashAlgo = 'sha256'; // Default for backwards compatibility
-        }
-        
-        const finishedChangeToken = blindSignature.processSignedToken(
-          changeTokenRequest,
-          changeSignature.toString('base64'),
-          activeKeyPair.publicKey
-        );
-        
-        // Format change token
-        changeToken = JSON.stringify({
-          data: finishedChangeToken.data,
-          signature: finishedChangeToken.signature,
-          key_id: activeKeyPair.id
         });
       }
       
@@ -408,30 +381,26 @@ async function redeemToken(req, res) {
       // Record the redemption
       await trx('redemptions').insert({
         token_id: tokenData.id,
-        amount: redemptionAmount.toNumber(),
-        currency: tokenData.currency,
-        status: changeToken ? 'partial' : 'completed',
-        remaining_amount: changeAmount.toNumber(),
-        change_token_id: changeToken ? JSON.parse(JSON.parse(changeToken).data).id : null,
+        denomination_id: keyPair.denominationId,
+        status: 'completed',
         created_at: new Date()
       });
       
       // Commit the transaction
       await trx.commit();
       
-      // Return redemption data
-      const response = {
+      // Return redemption data with denomination info
+      res.status(200).json({
         success: true,
-        amount: redemptionAmount.toString(),
-        currency: tokenData.currency
-      };
-      
-      if (changeToken) {
-        response.change_token = changeToken;
-        response.change_amount = changeAmount.toString();
-      }
-      
-      res.status(200).json(response);
+        token_id: tokenData.id,
+        denomination: {
+          id: denomination.id,
+          value: denomination.value,
+          currency: denomination.currency,
+          description: denomination.description
+        },
+        status: 'redeemed'
+      });
     } catch (error) {
       await trx.rollback();
       throw error;
@@ -833,11 +802,337 @@ async function getOutstandingValue(req, res) {
   }
 }
 
+/**
+ * Split a token
+ * 
+ * This function takes a token of one denomination and splits it into two tokens of smaller denominations.
+ * It's the Chaumian e-cash version of making change.
+ * 
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
+async function splitToken(req, res) {
+  try {
+    const { token, redeem_denomination_id } = req.body;
+    
+    // Validate inputs
+    if (!token) {
+      return res.status(400).json({
+        success: false,
+        message: 'Token is required'
+      });
+    }
+    
+    if (!redeem_denomination_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Redeem denomination ID is required'
+      });
+    }
+    
+    // Parse token
+    let parsedToken;
+    try {
+      parsedToken = JSON.parse(token);
+    } catch (e) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid token format'
+      });
+    }
+    
+    // Extract token components
+    const { data, signature, key_id } = parsedToken;
+    
+    if (!data || !signature || !key_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid token structure'
+      });
+    }
+    
+    // Parse token data
+    let tokenData;
+    try {
+      tokenData = JSON.parse(data);
+    } catch (e) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid token data'
+      });
+    }
+    
+    // Get key pair by ID
+    const keyPair = await keyManager.getKeyPairById(key_id);
+    
+    // Get denomination info
+    const originalDenomination = await keyManager.getDenomination(keyPair.denominationId);
+    
+    // Get redeem denomination info
+    const redeemDenomination = await keyManager.getDenomination(redeem_denomination_id);
+    
+    // Verify token
+    const tokenHash = require('crypto')
+      .createHash('sha256')
+      .update(Buffer.from(data, 'utf8'))
+      .digest();
+    
+    const isValid = blindSignature.verifySignature(
+      tokenHash,
+      Buffer.from(signature, 'base64'),
+      keyPair.publicKey
+    );
+    
+    if (!isValid) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid token signature'
+      });
+    }
+    
+    // Check redeemed denomination is smaller than original
+    if (redeemDenomination.value >= originalDenomination.value) {
+      return res.status(400).json({
+        success: false,
+        message: 'Redeem denomination must be smaller than original token denomination'
+      });
+    }
+    
+    // Calculate change denomination
+    const changeDenominationValue = originalDenomination.value - redeemDenomination.value;
+    
+    // Find a denomination for the change
+    const db = getDb();
+    const changeDenomination = await db('denominations')
+      .where('value', changeDenominationValue)
+      .where('currency', originalDenomination.currency)
+      .where('is_active', true)
+      .first();
+    
+    if (!changeDenomination) {
+      return res.status(400).json({
+        success: false,
+        message: `No denomination available for change value ${changeDenominationValue} ${originalDenomination.currency}`
+      });
+    }
+    
+    // Start a transaction
+    const trx = await db.transaction();
+    
+    try {
+      // Check if token has been redeemed
+      const storedToken = await trx('tokens')
+        .where('id', tokenData.id)
+        .first();
+      
+      if (storedToken && storedToken.status === 'redeemed') {
+        await trx.rollback();
+        return res.status(400).json({
+          success: false,
+          message: 'Token has already been redeemed'
+        });
+      }
+      
+      // If token isn't in the database yet, add it
+      if (!storedToken) {
+        await trx('tokens').insert({
+          id: tokenData.id,
+          denomination_id: keyPair.denominationId,
+          key_id: key_id,
+          blinded_token: '',
+          signed_token: signature,
+          status: 'pending',
+          created_at: new Date(),
+          updated_at: new Date(),
+          expires_at: new Date(Date.now() + config.crypto.tokenExpiry * 1000)
+        });
+      }
+      
+      // Create change token
+      // Get key for change denomination
+      const changeKeyPair = await keyManager.getKeyPairForDenomination(changeDenomination.id);
+      
+      // Create token request
+      const changeTokenRequest = blindSignature.createTokenRequest(
+        changeDenomination.id,
+        changeKeyPair.publicKey
+      );
+      
+      // Store change token in database
+      await trx('tokens').insert({
+        id: changeTokenRequest.id,
+        denomination_id: changeDenomination.id,
+        key_id: changeKeyPair.id,
+        blinded_token: changeTokenRequest.blindedToken,
+        status: 'pending',
+        created_at: new Date(),
+        updated_at: new Date(),
+        expires_at: new Date(Date.now() + config.crypto.tokenExpiry * 1000)
+      });
+      
+      // Sign the blinded token
+      const blindedTokenBuffer = Buffer.from(changeTokenRequest.blindedToken, 'base64');
+      const changeSignature = blindSignature.signBlindedMessage(blindedTokenBuffer, changeKeyPair.privateKey);
+      
+      // Update token status in database
+      await trx('tokens')
+        .where('id', changeTokenRequest.id)
+        .update({
+          signed_token: changeSignature.toString('base64'),
+          status: 'active',
+          updated_at: new Date()
+        });
+      
+      // Process the signed token
+      if (!changeTokenRequest.hashAlgo) {
+        changeTokenRequest.hashAlgo = 'sha256';
+      }
+      
+      const finishedChangeToken = blindSignature.processSignedToken(
+        changeTokenRequest,
+        changeSignature.toString('base64'),
+        changeKeyPair.publicKey
+      );
+      
+      // Mark original token as redeemed
+      await trx('tokens')
+        .where('id', tokenData.id)
+        .update({
+          status: 'redeemed',
+          redeemed_at: new Date(),
+          updated_at: new Date()
+        });
+      
+      // Record the redemption
+      await trx('redemptions').insert({
+        token_id: tokenData.id,
+        denomination_id: keyPair.denominationId,
+        status: 'split',
+        change_token_id: changeTokenRequest.id,
+        created_at: new Date()
+      });
+      
+      // Record the split
+      await trx('split_redemptions').insert({
+        original_token_id: tokenData.id,
+        original_denomination_id: keyPair.denominationId,
+        redeemed_denomination_id: redeem_denomination_id,
+        change_token_id: changeTokenRequest.id,
+        change_denomination_id: changeDenomination.id,
+        created_at: new Date()
+      });
+      
+      // Commit the transaction
+      await trx.commit();
+      
+      // Format change token
+      const changeToken = JSON.stringify({
+        data: finishedChangeToken.data,
+        signature: finishedChangeToken.signature,
+        key_id: changeKeyPair.id
+      });
+      
+      // Return split result
+      res.status(200).json({
+        success: true,
+        original_token_id: tokenData.id,
+        redeemed: {
+          denomination_id: redeem_denomination_id,
+          value: redeemDenomination.value,
+          currency: redeemDenomination.currency,
+          description: redeemDenomination.description
+        },
+        change_token: changeToken,
+        change: {
+          denomination_id: changeDenomination.id,
+          value: changeDenomination.value,
+          currency: changeDenomination.currency,
+          description: changeDenomination.description
+        }
+      });
+    } catch (error) {
+      await trx.rollback();
+      throw error;
+    }
+  } catch (error) {
+    logger.error({ error }, 'Failed to split token');
+    res.status(500).json({
+      success: false,
+      message: 'Failed to split token',
+      error: error.message
+    });
+  }
+}
+
+/**
+ * Get outstanding value by denomination
+ * 
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
+async function getOutstandingByDenomination(req, res) {
+  try {
+    const { currency } = req.body;
+    
+    // Get active denominations
+    const db = getDb();
+    const denominations = await db('denominations')
+      .where('is_active', true)
+      .where(builder => {
+        if (currency) {
+          builder.where('currency', currency);
+        }
+      })
+      .orderBy('value', 'asc');
+    
+    // Get count of active tokens for each denomination
+    const results = [];
+    
+    for (const denom of denominations) {
+      const count = await db('tokens')
+        .where('denomination_id', denom.id)
+        .where('status', 'active')
+        .count('id as count')
+        .first();
+      
+      results.push({
+        denomination_id: denom.id,
+        value: denom.value,
+        currency: denom.currency,
+        description: denom.description,
+        count: parseInt(count.count || 0),
+        total_value: denom.value * parseInt(count.count || 0)
+      });
+    }
+    
+    // Calculate total
+    const total = results.reduce((sum, item) => sum + item.total_value, 0);
+    
+    // Return results
+    res.status(200).json({
+      success: true,
+      denominations: results,
+      total: total,
+      currency: currency || 'all'
+    });
+  } catch (error) {
+    logger.error({ error }, 'Failed to get outstanding value by denomination');
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get outstanding value by denomination',
+      error: error.message
+    });
+  }
+}
+
 module.exports = {
+  listDenominations,
   createToken,
   verifyToken,
   redeemToken,
   remintToken,
+  splitToken,
   bulkCreateTokens,
-  getOutstandingValue
+  getOutstandingValue,
+  getOutstandingByDenomination
 };
