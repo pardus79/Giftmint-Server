@@ -212,13 +212,20 @@ function verifySignature(message, signature, publicKeyPem) {
     // Parse public key
     const publicKey = forge.pki.publicKeyFromPem(publicKeyPem);
     
-    // Verify signature
-    const verified = publicKey.verify(
-      message.toString('binary'),
-      signature.toString('binary')
-    );
+    // When using raw RSA signing (m^d mod n), verification requires
+    // calculating signature^e mod n and comparing with the original message
+    const n = publicKey.n;
+    const e = publicKey.e;
     
-    return verified;
+    // Convert to BigIntegers
+    const s = new forge.jsbn.BigInteger(signature.toString('hex'), 16);
+    const m = new forge.jsbn.BigInteger(message.toString('hex'), 16);
+    
+    // Compute s^e mod n, which should equal m for a valid signature
+    const calculatedMessage = s.modPow(e, n);
+    
+    // Compare the calculated message with the original
+    return calculatedMessage.equals(m);
   } catch (error) {
     logger.error({ error }, 'Failed to verify signature');
     return false;
@@ -247,7 +254,8 @@ function createTokenRequest(amount, currency, publicKeyPem, batchId = '') {
     // Parse public key to get modulus size
     const publicKey = forge.pki.publicKeyFromPem(publicKeyPem);
     const modulusBits = publicKey.n.bitLength();
-    const maxBytes = Math.floor((modulusBits - 11) / 8); // Safe message size for RSA
+    // For raw RSA (without padding), we need message < modulus
+    const maxBytes = Math.floor(modulusBits / 8) - 1; // Safe message size for raw RSA
     
     // Make sure the hash is not too large for the key
     // We'll use a shorter hash if needed (or could pad appropriately)

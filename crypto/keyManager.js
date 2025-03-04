@@ -64,8 +64,8 @@ async function init() {
  */
 async function createNewKeyPair() {
   try {
-    // Generate RSA key pair
-    const keyPair = forge.pki.rsa.generateKeyPair({ bits: 2048 });
+    // Generate a larger RSA key pair to ensure it can handle our hashes
+    const keyPair = forge.pki.rsa.generateKeyPair({ bits: 3072 });
     
     // Convert keys to PEM format
     const privateKey = forge.pki.privateKeyToPem(keyPair.privateKey);
