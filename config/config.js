@@ -41,6 +41,11 @@ const config = {
     level: process.env.LOG_LEVEL || 'info', // trace, debug, info, warn, error, fatal
     file: process.env.LOG_FILE,
   },
+  
+  // Token configuration
+  token: {
+    prefix: process.env.TOKEN_PREFIX || 'giftmint', // Customizable prefix for tokens
+  },
 };
 
 module.exports = config;

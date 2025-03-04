@@ -60,7 +60,7 @@ async function listDenominations(req, res) {
  */
 async function createToken(req, res) {
   try {
-    const { denomination_id, denomination_value } = req.body;
+    const { denomination_id, denomination_value, custom_prefix } = req.body;
     
     let keyPair;
     let denomination;
@@ -131,7 +131,7 @@ async function createToken(req, res) {
     };
     
     // Create both compact and raw token formats
-    const compactToken = encodeToken(tokenObject);
+    const compactToken = encodeToken(tokenObject, custom_prefix);
     
     res.status(200).json({
       success: true,
@@ -442,7 +442,7 @@ async function redeemToken(req, res) {
  */
 async function remintToken(req, res) {
   try {
-    const { token } = req.body;
+    const { token, custom_prefix } = req.body;
     
     // Validate input
     if (!token) {
@@ -628,8 +628,8 @@ async function remintToken(req, res) {
         key_id: activeKeyPair.id
       };
       
-      // Create compact token format
-      const compactToken = encodeToken(newTokenObject);
+      // Create compact token format with custom prefix if provided
+      const compactToken = encodeToken(newTokenObject, custom_prefix);
       
       // Return new token
       res.status(200).json({
@@ -661,7 +661,7 @@ async function remintToken(req, res) {
  */
 async function bulkCreateTokens(req, res) {
   try {
-    const { amount, currency, quantity, batch_id } = req.body;
+    const { amount, currency, quantity, batch_id, custom_prefix } = req.body;
     
     // Validate inputs
     if (!amount || isNaN(amount) || amount <= 0) {
@@ -754,8 +754,8 @@ async function bulkCreateTokens(req, res) {
           key_id: keyPair.id
         };
         
-        // Create compact token
-        const compactToken = encodeToken(tokenObject);
+        // Create compact token with custom prefix if provided
+        const compactToken = encodeToken(tokenObject, custom_prefix);
         
         // Add to tokens array
         tokens.push(compactToken);
@@ -848,7 +848,7 @@ async function getOutstandingValue(req, res) {
  */
 async function splitToken(req, res) {
   try {
-    const { token, redeem_denomination_id, redeem_amount } = req.body;
+    const { token, redeem_denomination_id, redeem_amount, custom_prefix } = req.body;
     
     // Validate inputs
     if (!token) {
@@ -1104,8 +1104,8 @@ async function splitToken(req, res) {
           key_id: changeKeyPair.id
         };
         
-        // Create compact token format
-        const compactToken = encodeToken(tokenObject);
+        // Create compact token format with custom prefix if provided
+        const compactToken = encodeToken(tokenObject, custom_prefix);
         
         changeTokens.push(compactToken);
         changeInfo.push({

@@ -1,6 +1,8 @@
 # Giftmint Mint Server
 
-A Chaumian e-cash mint for the Giftmint WordPress plugin that allows store owners to issue and redeem gift certificates.
+A Chaumian e-cash mint for the [Giftmint WordPress plugin](https://github.com/pardus79/Giftmint) that allows store owners to issue and redeem gift certificates.
+
+Repository: https://github.com/pardus79/Giftmint-Server
 
 ## Overview
 
@@ -42,7 +44,7 @@ Configure the server by editing the `.env` file:
 - **Database**: Choose between SQLite, MySQL, or PostgreSQL
 - **API Keys**: Set comma-separated API keys for authentication
 - **Rate Limiting**: Configure request limits
-- **Token Settings**: Configure token expiry and key rotation intervals
+- **Token Settings**: Configure token expiry, key rotation intervals, and default token prefix
 - **Logging**: Set log level and file path
 
 ## Setup with Caddy Server
@@ -79,6 +81,9 @@ API_KEYS=your_generated_api_key
 # Database and other settings as needed
 DB_TYPE=sqlite
 DB_FILE=./db/giftmint.db
+
+# Custom token prefix (optional)
+TOKEN_PREFIX=giftmint
 ```
 
 ### 3. Install and Configure Caddy
@@ -158,14 +163,16 @@ sudo ufw deny 3500/tcp
   {
     "amount": 100,
     "currency": "USD",
-    "batch_id": "optional-batch-id"
+    "batch_id": "optional-batch-id",
+    "custom_prefix": "optional-store-prefix"
   }
   ```
 - **Response**:
   ```json
   {
     "success": true,
-    "token": "serialized-token-string"
+    "token": "storeprefixABC123...", 
+    "token_raw": "{\"data\":\"...\",\"signature\":\"...\",\"key_id\":\"...\"}"
   }
   ```
 
@@ -215,16 +222,50 @@ sudo ufw deny 3500/tcp
 - **Body**:
   ```json
   {
-    "token": "serialized-token-string"
+    "token": "serialized-token-string",
+    "custom_prefix": "optional-store-prefix"
   }
   ```
 - **Response**:
   ```json
   {
     "success": true,
-    "new_token": "serialized-new-token-string",
+    "new_token": "storeprefixABC123...",
+    "new_token_raw": "{\"data\":\"...\",\"signature\":\"...\",\"key_id\":\"...\"}",
     "amount": "100",
     "currency": "USD"
+  }
+  ```
+  
+### Split Token
+- **URL**: `/api/v1/token/split`
+- **Method**: `POST`
+- **Body**:
+  ```json
+  {
+    "token": "serialized-token-string",
+    "redeem_amount": 512, 
+    "custom_prefix": "optional-store-prefix"
+  }
+  ```
+- **Response**:
+  ```json
+  {
+    "success": true,
+    "original_token_id": "token-id",
+    "original_value": 1024,
+    "redeemed": {
+      "denomination_id": "denom-id",
+      "value": 512,
+      "currency": "SATS",
+      "description": "512 Satoshis"
+    },
+    "change_tokens": ["storeprefixABC123...", "storeprefixDEF456..."],
+    "change_info": [
+      {"denomination_id": "denom-id", "value": 256, "currency": "SATS", "description": "256 Satoshis"},
+      {"denomination_id": "denom-id", "value": 256, "currency": "SATS", "description": "256 Satoshis"}
+    ],
+    "total_change_value": 512
   }
   ```
 
@@ -237,7 +278,8 @@ sudo ufw deny 3500/tcp
     "amount": 50,
     "currency": "USD",
     "quantity": 10,
-    "batch_id": "optional-batch-id"
+    "batch_id": "optional-batch-id",
+    "custom_prefix": "optional-store-prefix"
   }
   ```
 - **Response**:
