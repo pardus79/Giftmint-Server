@@ -10,6 +10,7 @@ const config = require('../config/config');
 const { getDb } = require('../db/database');
 const keyManager = require('../crypto/keyManager');
 const blindSignature = require('../crypto/blindSignature');
+const { encodeToken, decodeToken } = require('../utils/tokenEncoder');
 
 // Initialize logger
 const logger = pino({
@@ -122,14 +123,20 @@ async function createToken(req, res) {
       keyPair.publicKey
     );
     
-    // Return token (in true Chaumian fashion, just the blind signature with no metadata)
+    // Create token object (in true Chaumian fashion, just the blind signature with no metadata)
+    const tokenObject = {
+      data: finishedToken.data,
+      signature: finishedToken.signature,
+      key_id: keyPair.id
+    };
+    
+    // Create both compact and raw token formats
+    const compactToken = encodeToken(tokenObject);
+    
     res.status(200).json({
       success: true,
-      token: JSON.stringify({
-        data: finishedToken.data,
-        signature: finishedToken.signature,
-        key_id: keyPair.id
-      }),
+      token: compactToken,
+      token_raw: JSON.stringify(tokenObject), // Include raw format for backward compatibility
       // Send denomination info separately, not embedded in the token
       denomination: {
         id: denomination.id,
@@ -166,10 +173,16 @@ async function verifyToken(req, res) {
       });
     }
     
-    // Parse token
+    // Parse token - support both compact and raw JSON formats
     let parsedToken;
     try {
-      parsedToken = JSON.parse(token);
+      if (token.startsWith('giftmint')) {
+        // Compact token format
+        parsedToken = decodeToken(token);
+      } else {
+        // Legacy JSON format
+        parsedToken = JSON.parse(token);
+      }
     } catch (e) {
       return res.status(400).json({
         success: false,
@@ -278,10 +291,16 @@ async function redeemToken(req, res) {
       });
     }
     
-    // Parse token
+    // Parse token - support both compact and raw JSON formats
     let parsedToken;
     try {
-      parsedToken = JSON.parse(token);
+      if (token.startsWith('giftmint')) {
+        // Compact token format
+        parsedToken = decodeToken(token);
+      } else {
+        // Legacy JSON format
+        parsedToken = JSON.parse(token);
+      }
     } catch (e) {
       return res.status(400).json({
         success: false,
@@ -433,10 +452,16 @@ async function remintToken(req, res) {
       });
     }
     
-    // Parse token
+    // Parse token - support both compact and raw JSON formats
     let parsedToken;
     try {
-      parsedToken = JSON.parse(token);
+      if (token.startsWith('giftmint')) {
+        // Compact token format
+        parsedToken = decodeToken(token);
+      } else {
+        // Legacy JSON format
+        parsedToken = JSON.parse(token);
+      }
     } catch (e) {
       return res.status(400).json({
         success: false,
@@ -597,16 +622,20 @@ async function remintToken(req, res) {
       await trx.commit();
       
       // Format new token
-      const newToken = JSON.stringify({
+      const newTokenObject = {
         data: finishedNewToken.data,
         signature: finishedNewToken.signature,
         key_id: activeKeyPair.id
-      });
+      };
+      
+      // Create compact token format
+      const compactToken = encodeToken(newTokenObject);
       
       // Return new token
       res.status(200).json({
         success: true,
-        new_token: newToken,
+        new_token: compactToken,
+        new_token_raw: JSON.stringify(newTokenObject), // Include raw format for backward compatibility
         amount: tokenData.amount,
         currency: tokenData.currency
       });
@@ -718,12 +747,18 @@ async function bulkCreateTokens(req, res) {
           keyPair.publicKey
         );
         
-        // Add to tokens array
-        tokens.push(JSON.stringify({
+        // Format token object
+        const tokenObject = {
           data: finishedToken.data,
           signature: finishedToken.signature,
           key_id: keyPair.id
-        }));
+        };
+        
+        // Create compact token
+        const compactToken = encodeToken(tokenObject);
+        
+        // Add to tokens array
+        tokens.push(compactToken);
       }
       
       // Commit the transaction
@@ -830,10 +865,16 @@ async function splitToken(req, res) {
       });
     }
     
-    // Parse token
+    // Parse token - support both compact and raw JSON formats
     let parsedToken;
     try {
-      parsedToken = JSON.parse(token);
+      if (token.startsWith('giftmint')) {
+        // Compact token format
+        parsedToken = decodeToken(token);
+      } else {
+        // Legacy JSON format
+        parsedToken = JSON.parse(token);
+      }
     } catch (e) {
       return res.status(400).json({
         success: false,
@@ -1057,13 +1098,16 @@ async function splitToken(req, res) {
         });
         
         // Format change token for response
-        const formattedToken = JSON.stringify({
+        const tokenObject = {
           data: finishedChangeToken.data,
           signature: finishedChangeToken.signature,
           key_id: changeKeyPair.id
-        });
+        };
         
-        changeTokens.push(formattedToken);
+        // Create compact token format
+        const compactToken = encodeToken(tokenObject);
+        
+        changeTokens.push(compactToken);
         changeInfo.push({
           denomination_id: changeDenom.id,
           value: changeDenom.value,
