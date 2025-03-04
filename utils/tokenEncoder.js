@@ -51,17 +51,34 @@ function encodeToken(token, customPrefix) {
  */
 function decodeToken(encodedToken) {
   try {
+    console.log('Attempting to decode token:', encodedToken);
+    
+    // Check if it's already a JSON string (for backward compatibility)
+    if (encodedToken.startsWith('{') && encodedToken.endsWith('}')) {
+      console.log('Token appears to be JSON already, parsing directly');
+      return JSON.parse(encodedToken);
+    }
+    
     // Get default prefix from config
     const defaultPrefix = getTokenPrefix();
+    console.log('Default token prefix:', defaultPrefix);
     
     // Make sure the token starts with some kind of prefix
     // We'll be flexible about the prefix to support multiple stores
     let base64Token;
     
-    if (encodedToken.startsWith(defaultPrefix)) {
-      // Default prefix from config
+    // Try a direct approach first with specific prefix
+    if (encodedToken.startsWith('btcpins')) {
+      console.log('Found btcpins prefix, cutting it off');
+      base64Token = encodedToken.substring(7); // "btcpins" is 7 chars
+    } else if (encodedToken.startsWith('giftmint')) {
+      console.log('Found giftmint prefix, cutting it off');
+      base64Token = encodedToken.substring(8); // "giftmint" is 8 chars
+    } else if (encodedToken.startsWith(defaultPrefix)) {
+      console.log('Found default prefix, cutting it off');
       base64Token = encodedToken.slice(defaultPrefix.length);
     } else {
+      console.log('No known prefix found, searching for first base64 character');
       // Find the first occurrence of a base64 character
       // This allows any prefix to be used without hardcoding specific values
       // Check for all characters used in URL-safe base64: A-Z, a-z, 0-9, -, _
@@ -78,17 +95,15 @@ function decodeToken(encodedToken) {
       }
       
       if (prefixEndIndex === -1) {
-        throw new Error('Invalid token format');
+        console.log('No valid base64 characters found in token');
+        throw new Error('Invalid token format: no base64 characters found');
       }
       
-      // Check if the rest of the string only contains valid base64url chars
-      const potentialBase64 = encodedToken.slice(prefixEndIndex);
-      if (!/^[A-Za-z0-9\-_]+$/.test(potentialBase64)) {
-        throw new Error('Invalid token format: contains non-base64url characters');
-      }
-      
-      base64Token = potentialBase64;
+      console.log('Found base64 characters starting at index:', prefixEndIndex);
+      base64Token = encodedToken.slice(prefixEndIndex);
     }
+    
+    console.log('Base64 token portion:', base64Token);
     
     // Restore the URL-safe base64 to regular base64
     let standardBase64 = base64Token
@@ -100,12 +115,22 @@ function decodeToken(encodedToken) {
       standardBase64 += '=';
     }
     
-    // Decode the base64 string
-    const tokenBuffer = Buffer.from(standardBase64, 'base64');
+    console.log('Processed base64 with padding:', standardBase64);
     
-    // Parse the JSON
-    return JSON.parse(tokenBuffer.toString());
+    try {
+      // Decode the base64 string
+      const tokenBuffer = Buffer.from(standardBase64, 'base64');
+      
+      // Parse the JSON
+      const decoded = JSON.parse(tokenBuffer.toString());
+      console.log('Successfully decoded token');
+      return decoded;
+    } catch (innerError) {
+      console.log('Error during base64 decoding or JSON parsing:', innerError.message);
+      throw new Error(`Token appears to be in compact format but couldn't be decoded: ${innerError.message}`);
+    }
   } catch (error) {
+    console.log('Token decoding failed:', error.message);
     throw new Error(`Failed to decode token: ${error.message}`);
   }
 }
