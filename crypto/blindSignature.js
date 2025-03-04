@@ -107,6 +107,11 @@ function blindMessage(message, publicKeyPem, blindingFactor) {
     const m = new forge.jsbn.BigInteger(message.toString('hex'), 16);
     const r = new forge.jsbn.BigInteger(blindingFactor.toString('hex'), 16);
     
+    // Ensure message is smaller than modulus
+    if (m.compareTo(n) >= 0) {
+      throw new Error('Message is too large for the key modulus');
+    }
+    
     // Compute blinded message: m' = m * r^e mod n
     const rE = r.modPow(e, n);
     const blindedMessage = m.multiply(rE).mod(n);
@@ -141,11 +146,17 @@ function signBlindedMessage(blindedMessage, privateKeyPem) {
     // Convert blinded message to forge BigInteger
     const bm = new forge.jsbn.BigInteger(blindedMessage.toString('hex'), 16);
     
-    // Sign blinded message: s' = (m')^d mod n
-    const signedMessage = privateKey.decrypt(bm.toString(16), 'RSA-PKCS1-RAW');
+    // Make sure the message is within the valid range for the key
+    const modulus = privateKey.n;
+    if (bm.compareTo(modulus) >= 0) {
+      throw new Error('Message is too large for the key modulus');
+    }
     
-    // Convert to buffer
-    return Buffer.from(signedMessage, 'hex');
+    // Sign blinded message using raw RSA (directly computing m^d mod n)
+    const blindSignature = bm.modPow(privateKey.d, privateKey.n);
+    
+    // Convert to buffer and return
+    return Buffer.from(blindSignature.toString(16), 'hex');
   } catch (error) {
     logger.error({ error }, 'Failed to sign blinded message');
     throw error;
@@ -233,9 +244,24 @@ function createTokenRequest(amount, currency, publicKeyPem, batchId = '') {
       .update(token.tokenBuffer)
       .digest();
     
+    // Parse public key to get modulus size
+    const publicKey = forge.pki.publicKeyFromPem(publicKeyPem);
+    const modulusBits = publicKey.n.bitLength();
+    const maxBytes = Math.floor((modulusBits - 11) / 8); // Safe message size for RSA
+    
+    // Make sure the hash is not too large for the key
+    // We'll use a shorter hash if needed (or could pad appropriately)
+    let hashToUse = tokenHash;
+    if (tokenHash.length > maxBytes) {
+      // Use a hash function with shorter output if needed
+      hashToUse = crypto.createHash('sha1') // 20 bytes vs sha256's 32 bytes
+        .update(token.tokenBuffer)
+        .digest();
+    }
+    
     // Blind the token hash
     const { blindedMessage, blindingFactor } = blindMessage(
-      tokenHash,
+      hashToUse,
       publicKeyPem,
       token.blindingFactor
     );
@@ -247,7 +273,8 @@ function createTokenRequest(amount, currency, publicKeyPem, batchId = '') {
       batchId: token.batchId,
       blindedToken: blindedMessage.toString('base64'),
       blindingFactor: blindingFactor.toString('base64'),
-      tokenData: token.tokenData
+      tokenData: token.tokenData,
+      hashAlgo: hashToUse.length === 20 ? 'sha1' : 'sha256' // Keep track of which hash we used
     };
   } catch (error) {
     logger.error({ error }, 'Failed to create token request');
@@ -276,10 +303,18 @@ function processSignedToken(tokenRequest, blindSignature, publicKeyPem) {
       publicKeyPem
     );
     
-    // Recreate the token hash
-    const tokenHash = crypto.createHash('sha256')
-      .update(Buffer.from(tokenRequest.tokenData, 'utf8'))
-      .digest();
+    // Recreate the token hash, using the same algorithm as during creation
+    let tokenHash;
+    if (tokenRequest.hashAlgo === 'sha1') {
+      tokenHash = crypto.createHash('sha1')
+        .update(Buffer.from(tokenRequest.tokenData, 'utf8'))
+        .digest();
+    } else {
+      // Default to sha256
+      tokenHash = crypto.createHash('sha256')
+        .update(Buffer.from(tokenRequest.tokenData, 'utf8'))
+        .digest();
+    }
     
     // Verify the signature
     const isValid = verifySignature(tokenHash, signature, publicKeyPem);

@@ -86,7 +86,12 @@ async function createToken(req, res) {
         updated_at: new Date()
       });
     
-    // Process the signed token
+    // Process the signed token 
+    // Ensure tokenRequest has hashAlgo property if the original didn't include it
+    if (!tokenRequest.hashAlgo) {
+      tokenRequest.hashAlgo = 'sha256'; // Default for backwards compatibility
+    }
+    
     const finishedToken = blindSignature.processSignedToken(
       tokenRequest,
       signature.toString('base64'),
@@ -372,6 +377,11 @@ async function redeemToken(req, res) {
           });
         
         // Process the signed token
+        // Ensure tokenRequest has hashAlgo property if the original didn't include it
+        if (!changeTokenRequest.hashAlgo) {
+          changeTokenRequest.hashAlgo = 'sha256'; // Default for backwards compatibility
+        }
+        
         const finishedChangeToken = blindSignature.processSignedToken(
           changeTokenRequest,
           changeSignature.toString('base64'),
@@ -565,6 +575,11 @@ async function remintToken(req, res) {
         });
       
       // Process the signed token
+      // Ensure tokenRequest has hashAlgo property if the original didn't include it
+      if (!newTokenRequest.hashAlgo) {
+        newTokenRequest.hashAlgo = 'sha256'; // Default for backwards compatibility
+      }
+      
       const finishedNewToken = blindSignature.processSignedToken(
         newTokenRequest,
         newSignature.toString('base64'),
@@ -723,6 +738,11 @@ async function bulkCreateTokens(req, res) {
           });
         
         // Process the signed token
+        // Ensure tokenRequest has hashAlgo property if the original didn't include it
+        if (!tokenRequest.hashAlgo) {
+          tokenRequest.hashAlgo = 'sha256'; // Default for backwards compatibility
+        }
+        
         const finishedToken = blindSignature.processSignedToken(
           tokenRequest,
           signature.toString('base64'),

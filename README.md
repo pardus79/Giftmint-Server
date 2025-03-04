@@ -45,6 +45,109 @@ Configure the server by editing the `.env` file:
 - **Token Settings**: Configure token expiry and key rotation intervals
 - **Logging**: Set log level and file path
 
+## Setup with Caddy Server
+
+### 1. Generate API Key
+
+Generate a secure API key using this command:
+
+```bash
+openssl rand -base64 32
+```
+
+Copy the generated key for use in your `.env` file.
+
+### 2. Configure Mint Server
+
+Create and edit your `.env` file:
+
+```bash
+cd mint_server
+cp .env.example .env
+nano .env
+```
+
+Update the following settings:
+```
+# Server settings - bind only to localhost for security
+HOST=127.0.0.1
+PORT=3500
+
+# Add your generated API key
+API_KEYS=your_generated_api_key
+
+# Database and other settings as needed
+DB_TYPE=sqlite
+DB_FILE=./db/giftmint.db
+```
+
+### 3. Install and Configure Caddy
+
+If Caddy is not installed:
+
+```bash
+# For Debian/Ubuntu
+sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+sudo apt update
+sudo apt install caddy
+```
+
+Create a Caddyfile:
+
+```bash
+sudo nano /etc/caddy/Caddyfile
+```
+
+Add this configuration (replace `mint.yourdomain.com` with your actual domain):
+
+```
+mint.yourdomain.com {
+    reverse_proxy localhost:3500
+
+    # Optional: Add security headers
+    header {
+        # Enable HTTP Strict Transport Security (HSTS)
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        # Disable FLoC tracking
+        Permissions-Policy "interest-cohort=()"
+        # Prevent MIME-type sniffing
+        X-Content-Type-Options "nosniff"
+        # Prevent clickjacking
+        X-Frame-Options "DENY"
+        # Enable XSS filtering
+        X-XSS-Protection "1; mode=block"
+        # Disable browser caching of sensitive data
+        Cache-Control "no-store, no-cache, must-revalidate"
+    }
+
+    # Optional: Limit max request size
+    request_body {
+        max_size 1MB
+    }
+}
+```
+
+Apply the configuration:
+
+```bash
+sudo systemctl reload caddy
+```
+
+### 4. Configure Firewall
+
+If using UFW (Ubuntu's firewall):
+
+```bash
+# Allow Caddy's ports
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+
+# Make sure the mint server port is NOT exposed externally
+sudo ufw deny 3500/tcp
+```
+
 ## API Endpoints
 
 ### Create Token
