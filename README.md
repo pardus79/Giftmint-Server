@@ -324,4 +324,4 @@ sudo ufw deny 3500/tcp
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the Unlicense - see the LICENSE file for details.
