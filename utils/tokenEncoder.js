@@ -550,10 +550,9 @@ async function bundleTokens(tokens, customPrefix) {
             optimizedProof.a = proof.a;
           }
           
-          // 'c' for signature - apply optimized encoding for signatures
-          // Signatures in most cryptocurrency systems use fixed-length encodings
-          // Most signatures are ~64-65 bytes, but we'll handle variable lengths
-          // Convert all formats to raw bytes for most compact representation
+          // 'c' for signature - apply extreme optimization for signatures
+          // Blind signatures are the largest part of the token, typically 384 bytes
+          // We'll convert to the most efficient binary representation possible
           let sigBuffer;
           
           if (Buffer.isBuffer(proof.c)) {
@@ -564,10 +563,6 @@ async function bundleTokens(tokens, customPrefix) {
             // Check if it's base64 encoded
             try {
               sigBuffer = Buffer.from(proof.c, 'base64');
-              // Sanity check - if decoded length is very short or long, it might not be base64
-              if (sigBuffer.length < 5 || sigBuffer.length > 150) {
-                throw new Error('Unlikely signature length');
-              }
             } catch (e) {
               // Fallback to direct buffer creation
               sigBuffer = Buffer.from(proof.c);
@@ -577,8 +572,10 @@ async function bundleTokens(tokens, customPrefix) {
             sigBuffer = Buffer.from(JSON.stringify(proof.c));
           }
           
-          // Optimize the signature buffer by ensuring it has the smallest possible representation
-          optimizedProof.c = sigBuffer;
+          // Extreme optimization: If the signature is a large RSA signature,
+          // we can encode it more efficiently in CBOR by ensuring it's treated
+          // as a binary buffer, not as an integer or other type
+          optimizedProof.c = Buffer.from(sigBuffer);
           
           optimizedGroup.p.push(optimizedProof);
         }
@@ -596,34 +593,15 @@ async function bundleTokens(tokens, customPrefix) {
       collapseBigIntegers: true
     };
     
-    // Apply additional pre-encoding optimizations
+    // CBOR library already handles Buffer objects efficiently
+    // No need for extra conversion which increases size
     
-    // 1. Make sure every buffer is Uint8Array for most efficient encoding
-    const convertBuffersToUint8Arrays = (obj) => {
-      if (Buffer.isBuffer(obj)) {
-        return new Uint8Array(obj);
-      } else if (Array.isArray(obj)) {
-        return obj.map(convertBuffersToUint8Arrays);
-      } else if (obj && typeof obj === 'object') {
-        const result = {};
-        for (const key in obj) {
-          result[key] = convertBuffersToUint8Arrays(obj[key]);
-        }
-        return result;
-      }
-      return obj;
-    };
-    
-    // Apply buffer conversion for optimal encoding
-    const ultraOptimizedTokenV4 = convertBuffersToUint8Arrays(optimizedTokenV4);
-    
-    // Encode using cbor with minimal structure and optimized format
-    const cborData = cbor.encode(ultraOptimizedTokenV4, encodeOptions);
+    // Encode directly with optimized structure - simpler is better
+    const cborData = cbor.encode(optimizedTokenV4, encodeOptions);
     
     // Detailed debugging of CBOR data with enhanced compression metrics
     const originalSize = JSON.stringify(tokenV4).length;
     const optimizedSize = JSON.stringify(optimizedTokenV4).length;
-    const ultraOptimizedSize = JSON.stringify(ultraOptimizedTokenV4).length;
     const cborSize = cborData.length;
     
     logger.debug({
@@ -631,7 +609,6 @@ async function bundleTokens(tokens, customPrefix) {
       cborLength: cborSize,
       originalObjectSize: originalSize,
       optimizedSize: optimizedSize,
-      ultraOptimizedSize: ultraOptimizedSize,
       
       // Compression ratios
       jsonToOptimizedRatio: (originalSize / optimizedSize).toFixed(2) + 'x',
