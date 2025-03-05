@@ -176,7 +176,7 @@ async function bundleTokens(tokens, customPrefix) {
       } catch (err) {
         logger.error({ 
           error: err, 
-          tokenPrefix: token.substring(0, 40) + '...'
+          errorMsg: err.message
         }, 'Failed to decode token for CBOR bundling');
       }
     }
@@ -1230,6 +1230,6 @@ module.exports = {
         logger.error({ 
           error: err, 
           errorMessage: err.message,
-          tokenPrefix: token.substring(0, 40) + '...'
-        }, 'Failed to decode token for CBOR bundling');
+          tokenInfo: 'Unable to access token details'
+        }, 'Failed to decode token from bundle');
       }
