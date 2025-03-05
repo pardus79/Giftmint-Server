@@ -420,42 +420,129 @@ async function verifyToken(req, res) {
         const { bundleTokens, unbundleTokens } = require('../utils/tokenEncoder');
         unbundled = unbundleTokens(token);
         
-        // If we get multiple tokens back, verify each one
+        // If we get tokens back, verify each one
         if (unbundled && unbundled.t && Array.isArray(unbundled.t) && unbundled.t.length > 0) {
-          logger.debug(`Successfully unbundled token into ${unbundled.t.length} tokens`);
+          logger.debug(`Successfully unbundled CBOR data with ${unbundled.t.length} elements`);
           
           // Verify each token in the bundle
           const results = [];
           const totalValue = { amount: 0, currency: null };
           
-          for (const bundledToken of unbundled.t) {
+          // Get token count for debugging
+          const tokenCount = unbundled.t.reduce((count, token) => {
+            if (token && typeof token === 'string') {
+              // Direct token
+              return count + 1;
+            } else if (token && Array.isArray(token.p)) {
+              // TokenV4 format with nested proofs
+              return count + token.p.length;
+            }
+            return count;
+          }, 0);
+          
+          logger.debug(`Found approximately ${tokenCount} tokens to verify`);
+          
+          // Process all tokens, handling different structures
+          for (const item of unbundled.t) {
+            try {
+              // Check if this is a direct token string
+              if (typeof item === 'string') {
+                logger.debug('Processing direct token string');
+                await verifyAndAddSingleToken(item, results, totalValue);
+              } 
+              // Check if this is a wrapped token with multiple proofs
+              else if (item && Array.isArray(item.p)) {
+                logger.debug(`Processing token group with ${item.p.length} proofs`);
+                
+                // Process each proof in this group
+                for (const proof of item.p) {
+                  try {
+                    // Determine if we have needed data to make this into a token
+                    if (!proof || !proof.s) {
+                      logger.warn('Proof missing required data, skipping');
+                      continue;
+                    }
+                    
+                    logger.debug(`Verifying proof for secret: ${proof.s.substring(0, 8)}...`);
+                    
+                    // Get key ID from parent or proof
+                    const keyId = (item.i && Buffer.isBuffer(item.i)) ? 
+                      item.i.toString() : 
+                      (typeof item.i === 'string' ? item.i : 'unknown-key-id');
+                    
+                    // Get signature from proof
+                    const signature = Buffer.isBuffer(proof.c) ?
+                      proof.c.toString('base64') :
+                      proof.c;
+                    
+                    // Create token data
+                    const data = JSON.stringify({ id: proof.s });
+                    
+                    // Verify this token
+                    await verifyAndAddTokenComponents(
+                      data, signature, keyId, 
+                      results, totalValue
+                    );
+                  } catch (proofError) {
+                    logger.warn({ error: proofError }, 'Error processing proof in token group');
+                  }
+                }
+              } 
+              // Otherwise, try to parse as token
+              else {
+                logger.debug('Attempting to parse and verify as individual token');
+                await verifyAndAddSingleToken(item, results, totalValue);
+              }
+            } catch (itemError) {
+              logger.error({ error: itemError }, 'Error processing bundle item');
+              // Continue to next token
+            }
+          }
+          
+          // Helper function to verify a single token string
+          async function verifyAndAddSingleToken(tokenString, results, totalValue) {
             try {
               // Parse individual token
-              const parsed = decodeToken(bundledToken);
+              const parsed = decodeToken(tokenString);
               
               // Extract components and verify
               const { data, signature, key_id } = parsed;
               
-              if (!data || !signature || !key_id) {
-                logger.warn('Skipping token with invalid structure');
-                continue;
-              }
-              
+              // Verify components
+              await verifyAndAddTokenComponents(
+                data, signature, key_id, 
+                results, totalValue
+              );
+            } catch (error) {
+              logger.warn({ error }, 'Failed to verify single token');
+            }
+          }
+          
+          // Helper function to verify token components
+          async function verifyAndAddTokenComponents(data, signature, key_id, results, totalValue) {
+            if (!data || !signature || !key_id) {
+              logger.warn('Token missing required components');
+              return;
+            }
+            
+            try {
               // Parse token data
               const tokenData = JSON.parse(data);
+              
+              logger.debug(`Verifying token with ID: ${tokenData.id}`);
               
               // Get key pair by ID
               const keyPair = await keyManager.getKeyPairById(key_id);
               if (!keyPair) {
                 logger.warn({ key_id }, 'Key pair not found');
-                continue;
+                return;
               }
               
               // Get denomination info
               const denomination = await keyManager.getDenomination(keyPair.denominationId);
               if (!denomination) {
                 logger.warn({ denominationId: keyPair.denominationId }, 'Denomination not found');
-                continue;
+                return;
               }
               
               // Set currency if not already set
@@ -478,7 +565,7 @@ async function verifyToken(req, res) {
               
               if (!isValid) {
                 logger.warn({ token_id: tokenData.id }, 'Invalid signature');
-                continue;
+                return;
               }
               
               // Check if token has been redeemed
@@ -489,7 +576,7 @@ async function verifyToken(req, res) {
               
               if (redeemedToken) {
                 logger.warn({ token_id: tokenData.id }, 'Token already redeemed');
-                continue;
+                return;
               }
               
               // Token is valid, add to results
@@ -506,9 +593,10 @@ async function verifyToken(req, res) {
               
               // Add to total value
               totalValue.amount += denomination.value;
-            } catch (tokenError) {
-              logger.error({ error: tokenError }, 'Error verifying bundled token');
-              // Continue to next token
+              
+              logger.debug(`Successfully verified token: ${tokenData.id}, value: ${denomination.value}`);
+            } catch (error) {
+              logger.warn({ error }, 'Failed to verify token components');
             }
           }
           
