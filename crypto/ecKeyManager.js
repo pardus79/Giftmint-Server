@@ -224,23 +224,34 @@ async function createNewKeyPair(keysetId) {
  * Schedule key rotation
  */
 function scheduleKeyRotation() {
-  // Convert to milliseconds - ensure long enough interval to avoid excessive rotation
-  // The keyRotationInterval is in seconds, so multiply by 1000 to get milliseconds
-  const rotationIntervalMs = config.crypto.keyRotationInterval * 1000;
+  // Get rotation interval in seconds
+  const rotationIntervalSecs = config.crypto.keyRotationInterval || 86400;
   
-  logger.info(`Scheduling next key rotation in ${rotationIntervalMs / 1000} seconds`);
+  // Cap the interval to respect Node.js setTimeout limitations (max ~24.8 days)
+  // 2147483647 ms (max 32-bit signed int) = ~24.8 days
+  const MAX_TIMEOUT = 2147483647;
+  const desiredMs = rotationIntervalSecs * 1000;
+  const actualMs = Math.min(desiredMs, MAX_TIMEOUT);
   
-  setTimeout(async () => {
+  logger.info(`Scheduling next key rotation check in ${actualMs / 1000} seconds (capped from ${rotationIntervalSecs} seconds)`);
+  
+  // Use a single rotation schedule - prevent recursive explosion
+  clearTimeout(global._keyRotationTimer);
+  
+  global._keyRotationTimer = setTimeout(async () => {
     try {
-      logger.info('Rotating EC keys');
+      logger.info('Running scheduled key rotation check');
       await rotateKeys();
+      // Reschedule after completion
       scheduleKeyRotation();
     } catch (error) {
       logger.error({ error }, 'Failed to rotate EC keys');
-      // On error, still reschedule but with a longer delay (60 seconds)
-      setTimeout(() => scheduleKeyRotation(), 60000);
+      // On error, still reschedule but with a shorter delay (5 minutes)
+      logger.info('Rescheduling key rotation after error (5 minute delay)');
+      clearTimeout(global._keyRotationTimer);
+      global._keyRotationTimer = setTimeout(() => scheduleKeyRotation(), 300000);
     }
-  }, rotationIntervalMs);
+  }, actualMs);
 }
 
 /**
