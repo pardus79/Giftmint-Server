@@ -418,7 +418,31 @@ async function verifyToken(req, res) {
       let unbundled;
       try {
         const { bundleTokens, unbundleTokens } = require('../utils/tokenEncoder');
+        
+        // Enable extra debug info for troubleshooting
+        logger.level = 'debug';
+        
+        // Log the raw CBOR token for analysis
+        logger.debug({ 
+          tokenLength: token.length,
+          tokenStart: token.substring(0, 50),
+          tokenEnd: token.substring(token.length - 20),
+        }, 'Raw CBOR token for analysis');
+        
+        // Try to unbundle the token
         unbundled = unbundleTokens(token);
+        
+        // Log the complete unbundled structure for analysis
+        logger.debug({ 
+          unbundledKeys: unbundled ? Object.keys(unbundled) : 'none',
+          hasTokens: unbundled && unbundled.t ? true : false,
+          format: unbundled ? unbundled.format : 'unknown',
+          tokenCount: unbundled && unbundled.t ? unbundled.t.length : 0,
+          tokenStructure: unbundled && unbundled.t && unbundled.t[0] ? 
+            (typeof unbundled.t[0] === 'string' ? 
+              'string' : JSON.stringify(unbundled.t[0]).substring(0, 100)
+            ) : 'unknown'
+        }, 'Unbundled token structure analysis');
         
         // If we get tokens back, verify each one
         if (unbundled && unbundled.t && Array.isArray(unbundled.t) && unbundled.t.length > 0) {
