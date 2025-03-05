@@ -77,47 +77,15 @@ function bundleTokens(tokens, customPrefix) {
       return tokens[0];
     }
     
-    // Decode all tokens to extract their real contents
-    const tokenObjects = [];
+    // We'll store the tokens directly rather than trying to decode them
+    // This is more efficient for sharing and avoids potential parsing issues
+    const tokenObjects = tokens;
     
-    for (const token of tokens) {
-      try {
-        // Skip the prefix by finding the first base64 character
-        let base64Start = -1;
-        for (let i = 0; i < token.length; i++) {
-          const char = token[i];
-          if ((char >= 'A' && char <= 'Z') || 
-              (char >= 'a' && char <= 'z') || 
-              (char >= '0' && char <= '9') ||
-              char === '-' || char === '_') {
-            base64Start = i;
-            break;
-          }
-        }
-        
-        // Skip prefix and get base64 part
-        const base64Token = token.slice(base64Start);
-        
-        // Convert to standard base64
-        let standardBase64 = base64Token
-          .replace(/-/g, '+')
-          .replace(/_/g, '/');
-        
-        // Add padding if needed
-        while (standardBase64.length % 4) {
-          standardBase64 += '=';
-        }
-        
-        // Decode the base64 string
-        const tokenBuffer = Buffer.from(standardBase64, 'base64');
-        const tokenObject = JSON.parse(tokenBuffer.toString());
-        
-        tokenObjects.push(tokenObject);
-      } catch (err) {
-        // Skip invalid tokens
-        logger.warn({ error: err, token }, 'Failed to decode token for bundling');
-      }
-    }
+    // Log that we're bundling tokens
+    logger.debug({
+      tokenCount: tokens.length,
+      firstTokenPreview: tokens[0].substring(0, 20) + '...'
+    }, 'Bundling tokens directly without decoding');
     
     // Create a compact bundle
     const compact = {
