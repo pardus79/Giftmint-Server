@@ -77,43 +77,73 @@ function bundleTokens(tokens, customPrefix) {
       return tokens[0];
     }
     
-    // We'll store the tokens directly rather than trying to decode them
-    // This is more efficient for sharing and avoids potential parsing issues
-    const tokenObjects = tokens;
+    // Decode tokens to extract only essential data
+    const extractedTokens = [];
     
-    // Log that we're bundling tokens
-    logger.debug({
-      tokenCount: tokens.length,
-      firstTokenPreview: tokens[0].substring(0, 20) + '...'
-    }, 'Bundling tokens directly without decoding');
-    
-    // Create a compact bundle
-    const compact = {
-      v: 2, // Version for compact format
-      t: tokenObjects,
-      c: tokenObjects.length
-    };
-    
-    // Convert amount values to string to save space
-    const processTokens = (obj) => {
-      if (Array.isArray(obj)) {
-        return obj.map(processTokens);
-      } else if (obj && typeof obj === 'object') {
-        const result = {};
-        for (const [key, value] of Object.entries(obj)) {
-          // Skip the 'created' property to save space
-          if (key === 'created') continue;
-          result[key] = processTokens(value);
+    for (const token of tokens) {
+      try {
+        // Skip the prefix by finding the first base64 character
+        let base64Start = -1;
+        for (let i = 0; i < token.length; i++) {
+          const char = token[i];
+          if ((char >= 'A' && char <= 'Z') || 
+              (char >= 'a' && char <= 'z') || 
+              (char >= '0' && char <= '9') ||
+              char === '-' || char === '_') {
+            base64Start = i;
+            break;
+          }
         }
-        return result;
+        
+        // Skip prefix and get base64 part
+        const base64Token = token.slice(base64Start);
+        
+        // Convert to standard base64
+        let standardBase64 = base64Token
+          .replace(/-/g, '+')
+          .replace(/_/g, '/');
+        
+        // Add padding if needed
+        while (standardBase64.length % 4) {
+          standardBase64 += '=';
+        }
+        
+        // Decode the base64 string
+        const tokenBuffer = Buffer.from(standardBase64, 'base64');
+        const tokenObject = JSON.parse(tokenBuffer.toString());
+        
+        // Parse the data field to get the ID
+        const dataObj = JSON.parse(tokenObject.data);
+        
+        // Extract only essential data in an ultra-compact format
+        extractedTokens.push({
+          // Use single-letter keys to save space
+          i: dataObj.id,               // id
+          s: tokenObject.signature,    // signature
+          k: tokenObject.key_id        // key_id
+        });
+      } catch (err) {
+        // Skip invalid tokens
+        logger.warn({ error: err, token }, 'Failed to decode token for bundling');
       }
-      return obj;
+    }
+    
+    // Log token extraction results
+    logger.debug({
+      originalCount: tokens.length,
+      extractedCount: extractedTokens.length,
+    }, 'Extracted token data for ultra-compact bundling');
+    
+    // Create ultra-compact bundle with minimal data
+    const compact = {
+      v: 3,                  // Version 3 for ultra-compact format
+      t: extractedTokens,    // Extracted tokens with minimal data
+      c: extractedTokens.length,
+      p: customPrefix || config.token.prefix || 'giftmint' // Save the prefix
     };
     
-    const compactBundle = processTokens(compact);
-    
-    // Convert to buffer - use smaller JSON stringification
-    const jsonStr = JSON.stringify(compactBundle);
+    // Convert to buffer - use compressed JSON stringification
+    const jsonStr = JSON.stringify(compact);
     const bundleBuffer = Buffer.from(jsonStr);
     
     // Base64 encode with URL-safe characters
@@ -124,7 +154,7 @@ function bundleTokens(tokens, customPrefix) {
     
     // Add compact bundle prefix
     const prefix = getTokenPrefix(customPrefix);
-    return `${prefix}token${base64Bundle}`;
+    return `${prefix}p${base64Bundle}`;  // 'p' indicates the ultra-compact "proofs" format
   } catch (error) {
     logger.error({ error }, 'Failed to bundle tokens');
     throw new Error(`Failed to bundle tokens: ${error.message}`);
@@ -268,8 +298,73 @@ function unbundleTokens(bundleString) {
       return bundle;
     }
     
-    // Handle new compact format (with 'token' prefix)
-    // First locate the 'token' marker in the original string
+    // Handle ultra-compact format (with 'p' prefix)
+    // First check if it's the ultra-compact format
+    const hasCompactPrefix = bundleString.match(/[a-zA-Z]+p/);
+    
+    if (hasCompactPrefix) {
+      const compactMarker = 'p';
+      const prefixEnd = bundleString.indexOf(compactMarker);
+      
+      if (prefixEnd === -1) {
+        logger.warn('Potential ultra-compact format but no marker found');
+      } else {
+        // Extract the base64 part
+        const base64Bundle = bundleString.slice(prefixEnd + 1);
+        logger.debug({ base64Bundle: base64Bundle.substring(0, 20) + '...' }, 'Extracted base64 bundle (ultra-compact format)');
+        
+        // Restore the URL-safe base64 to regular base64
+        let standardBase64 = base64Bundle
+          .replace(/-/g, '+')
+          .replace(/_/g, '/');
+        
+        // Add padding if needed
+        while (standardBase64.length % 4) {
+          standardBase64 += '=';
+        }
+        
+        // Decode the base64 string
+        const bundleBuffer = Buffer.from(standardBase64, 'base64');
+        
+        // Parse the JSON
+        const compactBundle = JSON.parse(bundleBuffer.toString());
+        logger.debug({ bundleVersion: compactBundle.v, tokenCount: compactBundle.c }, 'Successfully decoded bundle (ultra-compact format)');
+        
+        // Recreate full tokens from compact format
+        if (compactBundle.v === 3) {
+          // Handle ultra-compact format (version 3)
+          const prefix = compactBundle.p || 'giftmint';
+          const recreatedTokens = [];
+          
+          for (const extractedToken of compactBundle.t) {
+            // Recreate token data
+            const tokenData = JSON.stringify({ id: extractedToken.i });
+            
+            // Recreate full token
+            const fullToken = {
+              data: tokenData,
+              signature: extractedToken.s,
+              key_id: extractedToken.k
+            };
+            
+            // Encode it back to compact format with proper prefix
+            const encodedToken = encodeToken(fullToken, prefix);
+            recreatedTokens.push(encodedToken);
+          }
+          
+          // Return in format compatible with version 2
+          return {
+            v: 2,
+            t: recreatedTokens,
+            c: recreatedTokens.length
+          };
+        }
+        
+        return compactBundle;
+      }
+    }
+    
+    // Handle compact format (with 'token' prefix)
     const tokenMarker = 'token';
     const tokenIndex = bundleString.indexOf(tokenMarker);
     
