@@ -363,10 +363,58 @@ function signBlindedMessage(B_, k) {
  */
 function unblindSignature(C_, blindingFactor, K) {
   try {
+    // Debug the inputs
+    logger.info({
+      C_Type: typeof C_,
+      C_IsUint8Array: C_ instanceof Uint8Array,
+      C_Length: C_ ? C_.length : 0,
+      C_Sample: C_ && C_.length > 0 ? Buffer.from(C_).toString('hex').slice(0, 20) : 'empty',
+      bfType: typeof blindingFactor,
+      bfIsUint8Array: blindingFactor instanceof Uint8Array,
+      bfLength: blindingFactor ? blindingFactor.length : 0,
+      KType: typeof K,
+      KIsUint8Array: K instanceof Uint8Array,
+      KLength: K ? K.length : 0,
+      KSample: K && K.length > 0 ? Buffer.from(K).toString('hex').slice(0, 20) : 'empty'
+    }, 'Unblind signature inputs');
+    
+    // Early validation
+    if (!C_ || C_.length === 0) {
+      throw new Error('Empty blind signature provided to unblindSignature');
+    }
+    
+    if (!blindingFactor || blindingFactor.length === 0) {
+      throw new Error('Empty blinding factor provided to unblindSignature');
+    }
+    
+    if (!K || K.length === 0) {
+      throw new Error('Empty public key provided to unblindSignature');
+    }
+    
     // Convert all inputs to Uint8Array using our helper
     const C_uint8 = toUint8Array(C_);
     const blindingFactor_uint8 = toUint8Array(blindingFactor);
     const K_uint8 = toUint8Array(K);
+    
+    // Log after conversion
+    logger.debug({
+      C_uint8Length: C_uint8.length,
+      blindingFactor_uint8Length: blindingFactor_uint8.length,
+      K_uint8Length: K_uint8.length
+    }, 'After conversion to Uint8Array');
+    
+    // Additional validation
+    if (C_uint8.length === 0) {
+      throw new Error('Empty blind signature after conversion');
+    }
+    
+    if (blindingFactor_uint8.length === 0) {
+      throw new Error('Empty blinding factor after conversion');
+    }
+    
+    if (K_uint8.length === 0) {
+      throw new Error('Empty public key after conversion');
+    }
     
     // Ensure C_ is a valid point
     if (!secp256k1.publicKeyVerify(C_uint8)) {
@@ -392,15 +440,21 @@ function unblindSignature(C_, blindingFactor, K) {
     // Calculate C = C_ - rK (point addition with negated rK)
     const C = secp256k1.publicKeyCombine([C_uint8, negRK]);
     
+    // Validate result
+    if (!C || C.length === 0) {
+      throw new Error('Generated an empty unblinded signature');
+    }
+    
     logger.debug({
       C_Prefix: Buffer.from(C_uint8).slice(0, 5).toString('hex'),
       rKPrefix: Buffer.from(rK).slice(0, 5).toString('hex'),
-      CPrefix: Buffer.from(C).slice(0, 5).toString('hex')
+      CPrefix: Buffer.from(C).slice(0, 5).toString('hex'),
+      CLength: C.length
     }, 'Unblinded signature');
     
     return C;
   } catch (error) {
-    logger.error({ error }, 'Failed to unblind signature');
+    logger.error({ error: error.message, stack: error.stack }, 'Failed to unblind signature');
     throw error;
   }
 }
@@ -509,16 +563,61 @@ function createTokenRequest(keysetId) {
  */
 function processSignedToken(tokenRequest, blindSignature, publicKey) {
   try {
-    // Convert inputs to Uint8Array using our helper
-    const C_ = toUint8Array(blindSignature, 'hex');
-    const blindingFactor = toUint8Array(tokenRequest.blindingFactor, 'hex');
-    const K = toUint8Array(publicKey, 'hex');
+    // Debug the inputs
+    logger.info({
+      blindSignatureType: typeof blindSignature,
+      blindSignatureLength: blindSignature ? blindSignature.length : 0,
+      blindSignaturePrefix: typeof blindSignature === 'string' ? blindSignature.slice(0, 20) : 'not a string',
+      publicKeyType: typeof publicKey,
+      publicKeyLength: publicKey ? publicKey.length : 0,
+      publicKeyPrefix: typeof publicKey === 'string' ? publicKey.slice(0, 20) : 'not a string',
+      tokenRequestKeys: tokenRequest ? Object.keys(tokenRequest) : [],
+      blindingFactorLength: tokenRequest && tokenRequest.blindingFactor ? tokenRequest.blindingFactor.length : 0
+    }, 'Process signed token inputs');
+    
+    // Safely convert inputs to Uint8Array using our helper
+    let C_ = null;
+    let blindingFactor = null;
+    let K = null;
+    
+    try {
+      C_ = toUint8Array(blindSignature, 'hex');
+      logger.debug({ C_Length: C_.length }, 'Converted blindSignature to Uint8Array');
+    } catch (e) {
+      logger.error({ error: e.message }, 'Failed to convert blindSignature to Uint8Array');
+      throw new Error('Invalid blind signature format');
+    }
+    
+    try {
+      blindingFactor = toUint8Array(tokenRequest.blindingFactor, 'hex');
+      logger.debug({ blindingFactorLength: blindingFactor.length }, 'Converted blindingFactor to Uint8Array');
+    } catch (e) {
+      logger.error({ error: e.message }, 'Failed to convert blindingFactor to Uint8Array');
+      throw new Error('Invalid blinding factor format');
+    }
+    
+    try {
+      K = toUint8Array(publicKey, 'hex');
+      logger.debug({ KLength: K.length }, 'Converted publicKey to Uint8Array');
+    } catch (e) {
+      logger.error({ error: e.message }, 'Failed to convert publicKey to Uint8Array');
+      throw new Error('Invalid public key format');
+    }
+    
+    // Additional validation
+    if (C_.length === 0) throw new Error('Empty blind signature');
+    if (blindingFactor.length === 0) throw new Error('Empty blinding factor');
+    if (K.length === 0) throw new Error('Empty public key');
     
     // Unblind the signature
     const C = unblindSignature(C_, blindingFactor, K);
     
+    // Verify the unblinded signature is valid
+    if (!C || C.length === 0) {
+      throw new Error('Unblinded signature is empty');
+    }
+    
     // Verify signature correctness
-    // Note: Full verification requires the private key, which we don't have on the client side
     // This is just a basic structure check
     if (!secp256k1.publicKeyVerify(C)) {
       throw new Error('Invalid unblinded signature structure');
@@ -532,7 +631,7 @@ function processSignedToken(tokenRequest, blindSignature, publicKey) {
       keysetId: tokenRequest.keysetId
     };
   } catch (error) {
-    logger.error({ error }, 'Failed to process signed token');
+    logger.error({ error: error.message, stack: error.stack }, 'Failed to process signed token');
     throw error;
   }
 }
