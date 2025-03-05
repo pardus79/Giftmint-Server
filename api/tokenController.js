@@ -9,7 +9,7 @@ const pino = require('pino');
 
 const config = require('../config/config');
 const { getDb } = require('../db/database');
-const keyManager = require('../crypto/ecKeyManager');
+const ecKeyManager = require('../crypto/ecKeyManager');
 const blindSignature = require('../crypto/ecBlindSignature'); // Using EC implementation only
 const { encodeToken, decodeToken } = require('../utils/tokenEncoder');
 
@@ -35,7 +35,7 @@ async function listDenominations(req, res) {
     const db = getDb();
     
     // Get all active denominations
-    const denominations = await db('denominations')
+    const denominations = await db('ec_keysets')
       .where('is_active', true)
       .orderBy('value', 'asc');
     
@@ -61,7 +61,7 @@ async function listDenominations(req, res) {
  */
 async function createToken(req, res) {
   try {
-    const { denomination_id, denomination_value, custom_prefix, batch_id, total_amount, currency } = req.body;
+    const { keyset_id, denomination_value, custom_prefix, batch_id, total_amount, currency } = req.body;
     const db = getDb();
     
     // Handle arbitrary amount using combination of denominations
@@ -69,7 +69,7 @@ async function createToken(req, res) {
       logger.info(`Creating token with total_amount: ${total_amount}`);
       
       // Get all available denominations for the requested currency
-      const availableDenoms = await db('denominations')
+      const availableDenoms = await db('ec_keysets')
         .where('is_active', true)
         .orderBy('value', 'desc');
         
@@ -116,7 +116,7 @@ async function createToken(req, res) {
       for (const denom of tokenDenominations) {
         if (!keyPairsMap[denom.id]) {
           try {
-            keyPairsMap[denom.id] = await keyManager.getKeyPairForDenomination(denom.id);
+            keyPairsMap[denom.id] = await ecKeyManager.getKeyPairForKeyset(denom.id);
             logger.info(`Loaded keypair for denomination: ${denom.id} (${denom.value} ${denom.currency})`);
           } catch (err) {
             logger.error({error: err}, `Failed to load keypair for denomination: ${denom.id}`);
@@ -181,7 +181,7 @@ async function createToken(req, res) {
             
             // Add to batch updates
             statUpdates.push({
-              denomination_id: denom.id,
+              keyset_id: denom.id,
               amount: 1
             });
           } catch (tokenError) {
@@ -191,19 +191,19 @@ async function createToken(req, res) {
         }
         
         // Batch update token stats
-        const denomIds = [...new Set(statUpdates.map(s => s.denomination_id))];
+        const denomIds = [...new Set(statUpdates.map(s => s.keyset_id))];
         for (const denomId of denomIds) {
-          const count = statUpdates.filter(s => s.denomination_id === denomId)
+          const count = statUpdates.filter(s => s.keyset_id === denomId)
             .reduce((sum, item) => sum + item.amount, 0);
             
           const updated = await trx('token_stats')
-            .where('denomination_id', denomId)
+            .where('keyset_id', denomId)
             .increment('minted_count', count)
             .update('last_updated', trx.fn.now());
             
           if (!updated) {
             await trx('token_stats').insert({
-              denomination_id: denomId,
+              keyset_id: denomId,
               minted_count: count,
               redeemed_count: 0,
               last_updated: trx.fn.now()
@@ -261,23 +261,23 @@ async function createToken(req, res) {
     let keyPair;
     let denomination;
     
-    // Get key pair based on either denomination_id or denomination_value
-    if (denomination_id) {
+    // Get key pair based on either keyset_id or denomination_value
+    if (keyset_id) {
       // Get key pair for specific denomination ID
-      keyPair = await keyManager.getKeyPairForDenomination(denomination_id);
-      denomination = await keyManager.getDenomination(keyPair.denominationId);
+      keyPair = await ecKeyManager.getKeyPairForKeyset(keyset_id);
+      denomination = await ecKeyManager.getKeyset(keyPair.keysetId);
     } else if (denomination_value) {
       // Try to find denomination by value
-      keyPair = await keyManager.getKeyPairForDenomination(denomination_value);
-      denomination = await keyManager.getDenomination(keyPair.denominationId);
+      keyPair = await ecKeyManager.getKeyPairForKeyset(denomination_value);
+      denomination = await ecKeyManager.getKeyset(keyPair.keysetId);
     } else {
       // Get default (smallest) denomination key pair
-      keyPair = await keyManager.getActiveKeyPair();
-      denomination = await keyManager.getDenomination(keyPair.denominationId);
+      keyPair = await ecKeyManager.getActiveKeyPair();
+      denomination = await ecKeyManager.getKeyset(keyPair.keysetId);
     }
     
     // Create token request
-    const tokenRequest = blindSignature.createTokenRequest(keyPair.denominationId);
+    const tokenRequest = blindSignature.createTokenRequest(keyPair.keysetId);
     
     // Sign the blinded message - we don't store tokens until they're redeemed
     const blindedMessage = Buffer.from(tokenRequest.blindedMessage, 'hex');
@@ -287,15 +287,15 @@ async function createToken(req, res) {
     // Update aggregate token stats for this denomination
     try {
       // Try to increment existing stats
-      const updated = await db('token_stats')
-        .where('denomination_id', keyPair.denominationId)
+      const updated = await db('ec_token_stats')
+        .where('keyset_id', keyPair.keysetId)
         .increment('minted_count', 1)
         .update('last_updated', db.fn.now());
       
       // If no row was updated, create new stats entry
       if (!updated) {
-        await db('token_stats').insert({
-          denomination_id: keyPair.denominationId,
+        await db('ec_token_stats').insert({
+          keyset_id: keyPair.keysetId,
           minted_count: 1,
           redeemed_count: 0,
           last_updated: db.fn.now()
@@ -664,16 +664,16 @@ async function verifyToken(req, res) {
               logger.debug(`Verifying token with ID: ${tokenData.id}`);
               
               // Get key pair by ID
-              const keyPair = await keyManager.getKeyPairById(key_id);
+              const keyPair = await ecKeyManager.getKeyPairById(key_id);
               if (!keyPair) {
                 logger.warn({ key_id }, 'Key pair not found');
                 return;
               }
               
               // Get denomination info
-              const denomination = await keyManager.getDenomination(keyPair.denominationId);
+              const denomination = await ecKeyManager.getKeyset(keyPair.keysetId);
               if (!denomination) {
-                logger.warn({ denominationId: keyPair.denominationId }, 'Denomination not found');
+                logger.warn({ denominationId: keyPair.keysetId }, 'Denomination not found');
                 return;
               }
               
@@ -744,7 +744,7 @@ async function verifyToken(req, res) {
               if (!isValid) {
                 logger.warn({ 
                   token_id: tokenData.id,
-                  denomination_id: denomination.id,
+                  keyset_id: denomination.id,
                   keyId: key_id
                 }, 'Invalid signature');
                 return;
@@ -752,7 +752,7 @@ async function verifyToken(req, res) {
               
               // Check if token has been redeemed
               const db = getDb();
-              const redeemedToken = await db('redeemed_tokens')
+              const redeemedToken = await db('ec_redeemed_tokens')
                 .where('id', tokenData.id)
                 .first();
               
@@ -858,10 +858,10 @@ async function verifyToken(req, res) {
     }
     
     // Get key pair by ID
-    const keyPair = await keyManager.getKeyPairById(key_id);
+    const keyPair = await ecKeyManager.getKeyPairById(key_id);
     
     // Get denomination info
-    const denomination = await keyManager.getDenomination(keyPair.denominationId);
+    const denomination = await ecKeyManager.getKeyset(keyPair.keysetId);
     
     // Parse token data to get the secret
     // Already parsed tokenData above
@@ -887,7 +887,7 @@ async function verifyToken(req, res) {
     
     // Check if token has been redeemed - now uses redeemed_tokens table
     const db = getDb();
-    const redeemedToken = await db('redeemed_tokens')
+    const redeemedToken = await db('ec_redeemed_tokens')
       .where('id', tokenData.id)
       .first();
     
@@ -980,10 +980,10 @@ async function redeemToken(req, res) {
     }
     
     // Get key pair by ID
-    const keyPair = await keyManager.getKeyPairById(key_id);
+    const keyPair = await ecKeyManager.getKeyPairById(key_id);
     
     // Get denomination info
-    const denomination = await keyManager.getDenomination(keyPair.denominationId);
+    const denomination = await ecKeyManager.getKeyset(keyPair.keysetId);
     
     // Parse token data to get the secret
     // Already parsed tokenData above
@@ -1030,7 +1030,7 @@ async function redeemToken(req, res) {
       const now = new Date();
       await trx('redeemed_tokens').insert({
         id: tokenData.id,
-        denomination_id: keyPair.denominationId,
+        keyset_id: keyPair.keysetId,
         key_id: key_id,
         redeemed_at: now
       });
@@ -1038,20 +1038,20 @@ async function redeemToken(req, res) {
       // Record the redemption details
       await trx('redemptions').insert({
         token_id: tokenData.id,
-        denomination_id: keyPair.denominationId,
+        keyset_id: keyPair.keysetId,
         status: 'completed',
         created_at: now
       });
       
       // Update token stats
       await trx('token_stats')
-        .where('denomination_id', keyPair.denominationId)
+        .where('keyset_id', keyPair.keysetId)
         .increment('redeemed_count', 1)
         .update('last_updated', now)
         .catch(async () => {
           // If no row exists yet, create it
           await trx('token_stats').insert({
-            denomination_id: keyPair.denominationId,
+            keyset_id: keyPair.keysetId,
             minted_count: 0, // We don't know how many were minted before stats tracking
             redeemed_count: 1,
             last_updated: now
@@ -1160,7 +1160,7 @@ async function remintToken(req, res) {
     }
     
     // Get key pair by ID
-    const keyPair = await keyManager.getKeyPairById(key_id);
+    const keyPair = await ecKeyManager.getKeyPairById(key_id);
     if (!keyPair) {
       return res.status(400).json({
         success: false,
@@ -1169,7 +1169,7 @@ async function remintToken(req, res) {
     }
     
     // Get denomination info
-    const denomination = await keyManager.getDenomination(keyPair.denominationId);
+    const denomination = await ecKeyManager.getKeyset(keyPair.keysetId);
     if (!denomination) {
       return res.status(400).json({
         success: false,
@@ -1219,7 +1219,7 @@ async function remintToken(req, res) {
       }
       
       // Create a new token with the same denomination
-      const newTokenRequest = blindSignature.createTokenRequest(keyPair.denominationId);
+      const newTokenRequest = blindSignature.createTokenRequest(keyPair.keysetId);
       
       // Add a log to help debug
       logger.info('Created new token request with the same denomination');
@@ -1249,21 +1249,21 @@ async function remintToken(req, res) {
       // Mark old token as redeemed in redeemed_tokens table
       await trx('redeemed_tokens').insert({
         id: tokenData.id,
-        denomination_id: denomination.id,
+        keyset_id: denomination.id,
         key_id: key_id,
         redeemed_at: trx.fn.now()
       });
       
       // Update stats
       await trx('token_stats')
-        .where('denomination_id', denomination.id)
+        .where('keyset_id', denomination.id)
         .increment('minted_count', 1)
         .increment('redeemed_count', 1)
         .update('last_updated', trx.fn.now())
         .catch(async () => {
           // If record doesn't exist, create it
           await trx('token_stats').insert({
-            denomination_id: denomination.id,
+            keyset_id: denomination.id,
             minted_count: 1,
             redeemed_count: 1,
             last_updated: trx.fn.now()
@@ -1350,7 +1350,7 @@ async function bulkCreateTokens(req, res) {
     const batchId = batch_id || `bulk_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
     
     // Get active key pair
-    const keyPair = await keyManager.getActiveKeyPair();
+    const keyPair = await ecKeyManager.getActiveKeyPair();
     
     // Create tokens
     const tokens = [];
@@ -1363,7 +1363,7 @@ async function bulkCreateTokens(req, res) {
       for (let i = 0; i < quantity; i++) {
         // Create token request (with proper denomination ID or keyset ID)
         // For EC version, we just need the keyset ID
-        const denominationId = keyPair.denominationId || keyPair.keysetId;
+        const denominationId = keyPair.keysetId || keyPair.keysetId;
         const tokenRequest = blindSignature.createTokenRequest(denominationId);
         
         // Store token in database
@@ -1479,15 +1479,15 @@ async function getOutstandingValue(req, res) {
     
     if (currency) {
       // Calculate outstanding value for a specific currency
-      const denominationStats = await db('denominations')
-        .join('token_stats', 'denominations.id', 'token_stats.denomination_id')
-        .where('denominations.currency', currency)
+      const denominationStats = await db('ec_keysets')
+        .join('ec_token_stats', 'ec_keysets.id', 'ec_token_stats.keyset_id')
+        .where('ec_keysets.currency', currency)
         .select(
-          'denominations.currency',
-          db.raw('SUM(denominations.value * token_stats.minted_count) as total_value'),
-          db.raw('SUM(denominations.value * token_stats.redeemed_count) as redeemed_value')
+          'ec_keysets.currency',
+          db.raw('SUM(ec_keysets.value * ec_token_stats.minted_count) as total_value'),
+          db.raw('SUM(ec_keysets.value * ec_token_stats.redeemed_count) as redeemed_value')
         )
-        .groupBy('denominations.currency')
+        .groupBy('ec_keysets.currency')
         .first();
       
       if (!denominationStats) {
@@ -1510,11 +1510,11 @@ async function getOutstandingValue(req, res) {
     }
     
     // Calculate total outstanding value across all denominations
-    const allStats = await db('denominations')
-      .join('token_stats', 'denominations.id', 'token_stats.denomination_id')
+    const allStats = await db('ec_keysets')
+      .join('ec_token_stats', 'ec_keysets.id', 'ec_token_stats.keyset_id')
       .select(
-        db.raw('SUM(denominations.value * token_stats.minted_count) as total_value'),
-        db.raw('SUM(denominations.value * token_stats.redeemed_count) as redeemed_value')
+        db.raw('SUM(ec_keysets.value * ec_token_stats.minted_count) as total_value'),
+        db.raw('SUM(ec_keysets.value * ec_token_stats.redeemed_count) as redeemed_value')
       )
       .first();
     
@@ -1554,7 +1554,7 @@ async function getOutstandingValue(req, res) {
  */
 async function splitTokenImplementation(req, res) {
   try {
-    const { token, redeem_denomination_id, redeem_amount, custom_prefix } = req.body;
+    const { token, redeem_keyset_id, redeem_amount, custom_prefix } = req.body;
     let tokenData; // Pre-declare tokenData to avoid redeclaration issues
     
     // Validate inputs
@@ -1565,10 +1565,10 @@ async function splitTokenImplementation(req, res) {
       });
     }
     
-    if (!redeem_denomination_id && !redeem_amount) {
+    if (!redeem_keyset_id && !redeem_amount) {
       return res.status(400).json({
         success: false,
-        message: 'Either redeem_denomination_id or redeem_amount is required'
+        message: 'Either redeem_keyset_id or redeem_amount is required'
       });
     }
     
@@ -1610,10 +1610,10 @@ async function splitTokenImplementation(req, res) {
     }
     
     // Get key pair by ID
-    const keyPair = await keyManager.getKeyPairById(key_id);
+    const keyPair = await ecKeyManager.getKeyPairById(key_id);
     
     // Get denomination info
-    const originalDenomination = await keyManager.getDenomination(keyPair.denominationId);
+    const originalDenomination = await ecKeyManager.getKeyset(keyPair.keysetId);
     
     // Verify token
     const tokenHash = require('crypto')
@@ -1638,15 +1638,15 @@ async function splitTokenImplementation(req, res) {
     let redeemDenomination = null;
     let redeemValue = 0;
     
-    if (redeem_denomination_id) {
-      redeemDenomination = await keyManager.getDenomination(redeem_denomination_id);
+    if (redeem_keyset_id) {
+      redeemDenomination = await ecKeyManager.getKeyset(redeem_keyset_id);
       redeemValue = redeemDenomination.value;
     } else if (redeem_amount) {
       redeemValue = parseInt(redeem_amount, 10);
       
       // Find the closest denomination less than or equal to the redeem amount
       const db = getDb();
-      redeemDenomination = await db('denominations')
+      redeemDenomination = await db('ec_keysets')
         .where('value', '<=', redeemValue)
         .where('currency', originalDenomination.currency)
         .where('is_active', true)
@@ -1674,7 +1674,7 @@ async function splitTokenImplementation(req, res) {
     
     // Get all active denominations
     const db = getDb();
-    const allDenominations = await db('denominations')
+    const allDenominations = await db('ec_keysets')
       .where('currency', originalDenomination.currency)
       .where('is_active', true)
       .orderBy('value', 'desc');
@@ -1714,7 +1714,7 @@ async function splitTokenImplementation(req, res) {
       // Mark original token as redeemed - add to redeemed_tokens
       await trx('redeemed_tokens').insert({
         id: tokenData.id,
-        denomination_id: keyPair.denominationId,
+        keyset_id: keyPair.keysetId,
         key_id: key_id,
         redeemed_at: new Date()
       });
@@ -1723,8 +1723,8 @@ async function splitTokenImplementation(req, res) {
       const [splitId] = await trx('split_redemptions')
         .insert({
           original_token_id: tokenData.id,
-          original_denomination_id: keyPair.denominationId,
-          redeemed_denomination_id: redeemDenomination.id,
+          original_keyset_id: keyPair.keysetId,
+          redeemed_keyset_id: redeemDenomination.id,
           created_at: new Date()
         })
         .returning('id');
@@ -1735,7 +1735,7 @@ async function splitTokenImplementation(req, res) {
       
       for (const changeDenom of changeDenominations) {
         // Get key for this denomination
-        const changeKeyPair = await keyManager.getKeyPairForDenomination(changeDenom.id);
+        const changeKeyPair = await ecKeyManager.getKeyPairForKeyset(changeDenom.id);
         
         // Create token request
         const changeTokenRequest = blindSignature.createTokenRequest(
@@ -1746,7 +1746,7 @@ async function splitTokenImplementation(req, res) {
         // Store change token in database
         await trx('tokens').insert({
           id: changeTokenRequest.id,
-          denomination_id: changeDenom.id,
+          keyset_id: changeDenom.id,
           key_id: changeKeyPair.id,
           blinded_token: changeTokenRequest.blindedToken,
           status: 'pending',
@@ -1783,7 +1783,7 @@ async function splitTokenImplementation(req, res) {
         await trx('change_tokens').insert({
           split_id: splitId,
           token_id: changeTokenRequest.id,
-          denomination_id: changeDenom.id,
+          keyset_id: changeDenom.id,
           created_at: new Date()
         });
         
@@ -1799,7 +1799,7 @@ async function splitTokenImplementation(req, res) {
         
         changeTokens.push(compactToken);
         changeInfo.push({
-          denomination_id: changeDenom.id,
+          keyset_id: changeDenom.id,
           value: changeDenom.value,
           currency: changeDenom.currency,
           description: changeDenom.description
@@ -1809,7 +1809,7 @@ async function splitTokenImplementation(req, res) {
       // Create redemption record
       await trx('redemptions').insert({
         token_id: tokenData.id,
-        denomination_id: keyPair.denominationId,
+        keyset_id: keyPair.keysetId,
         status: 'split',
         change_token_id: null, // We're using the change_tokens table now
         created_at: new Date()
@@ -1824,7 +1824,7 @@ async function splitTokenImplementation(req, res) {
         original_token_id: tokenData.id,
         original_value: originalDenomination.value,
         redeemed: {
-          denomination_id: redeemDenomination.id,
+          keyset_id: redeemDenomination.id,
           value: redeemDenomination.value,
           currency: redeemDenomination.currency,
           description: redeemDenomination.description
@@ -1859,7 +1859,7 @@ async function getOutstandingByDenomination(req, res) {
     
     // Get active denominations
     const db = getDb();
-    const denominations = await db('denominations')
+    const denominations = await db('ec_keysets')
       .where('is_active', true)
       .where(builder => {
         if (currency) {
@@ -1873,13 +1873,13 @@ async function getOutstandingByDenomination(req, res) {
     
     for (const denom of denominations) {
       const count = await db('tokens')
-        .where('denomination_id', denom.id)
+        .where('keyset_id', denom.id)
         .where('status', 'active')
         .count('id as count')
         .first();
       
       results.push({
-        denomination_id: denom.id,
+        keyset_id: denom.id,
         value: denom.value,
         currency: denom.currency,
         description: denom.description,
