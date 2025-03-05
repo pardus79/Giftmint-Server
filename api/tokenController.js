@@ -565,42 +565,119 @@ async function verifyToken(req, res) {
                         continue;
                       }
                       
-                      logger.debug(`Verifying proof for secret: ${proof.s.substring(0, 8)}...`);
+                      // Handle secret ID properly - could be Buffer or string
+                      let secretId;
+                      
+                      if (Buffer.isBuffer(proof.s)) {
+                        try {
+                          // For Buffer, convert to hex string for logging and JSON
+                          secretId = proof.s.toString('hex');
+                          logger.debug(`Verifying proof for Buffer secret ID: ${secretId.substring(0, 16)}...`);
+                        } catch (e) {
+                          logger.warn('Failed to extract secret ID from Buffer, using raw buffer');
+                          secretId = proof.s;
+                        }
+                      } else if (typeof proof.s === 'string') {
+                        // String secret ID - use directly
+                        secretId = proof.s;
+                        logger.debug(`Verifying proof for string secret ID: ${secretId.substring(0, 16)}...`);
+                      } else if (proof.s instanceof Uint8Array) {
+                        // Uint8Array secret
+                        secretId = Buffer.from(proof.s).toString('hex');
+                        logger.debug(`Verifying proof for Uint8Array secret ID: ${secretId.substring(0, 16)}...`);
+                      } else {
+                        // Other type - convert to string as best as possible
+                        try {
+                          secretId = JSON.stringify(proof.s);
+                          logger.debug(`Verifying proof for non-standard secret ID type: ${secretId.substring(0, 16)}...`);
+                        } catch (e) {
+                          logger.warn('Failed to stringify secret ID, skipping');
+                          continue;
+                        }
+                      }
                       
                       // Get key ID from parent or proof
-                      const keyId = (item.i && Buffer.isBuffer(item.i)) ? 
-                        item.i.toString() : 
-                        (typeof item.i === 'string' ? item.i : 'unknown-key-id');
+                      let keyId;
+                      if (item.i) {
+                        if (Buffer.isBuffer(item.i)) {
+                          keyId = item.i.toString('hex');
+                        } else if (item.i instanceof Uint8Array) {
+                          keyId = Buffer.from(item.i).toString('hex');
+                        } else if (typeof item.i === 'string') {
+                          keyId = item.i;
+                        } else {
+                          try {
+                            keyId = JSON.stringify(item.i);
+                          } catch (e) {
+                            keyId = 'unknown-key-id';
+                          }
+                        }
+                      } else {
+                        keyId = 'unknown-key-id';
+                      }
+                      
+                      logger.debug({
+                        keyIdType: typeof keyId,
+                        keyIdValue: keyId.substring(0, 16)
+                      }, 'Extracted key ID');
                       
                       // Get signature from proof
-                      // Handle signature properly - ensure consistent base64 format
+                      // Handle signature properly - could be Buffer, base64 string, or other
                       let signature;
-                      if (Buffer.isBuffer(proof.c)) {
-                        signature = proof.c.toString('base64');
-                      } else if (typeof proof.c === 'string') {
-                        signature = proof.c;
-                      } else {
-                        logger.warn({
-                          proofType: typeof proof.c,
-                          secretId: proof.s.substring(0, 8)
-                        }, 'Unexpected signature format in proof');
+                      try {
+                        if (Buffer.isBuffer(proof.c)) {
+                          signature = proof.c; // Keep as Buffer
+                          logger.debug('Signature is already a Buffer, using directly');
+                        } else if (proof.c instanceof Uint8Array) {
+                          signature = Buffer.from(proof.c);
+                          logger.debug('Converted Uint8Array signature to Buffer');
+                        } else if (typeof proof.c === 'string') {
+                          signature = proof.c;
+                          logger.debug('Using string signature directly');
+                        } else {
+                          logger.warn({
+                            proofType: typeof proof.c,
+                            secretId: secretId.substring(0, 16)
+                          }, 'Unexpected signature format in proof');
+                          continue;
+                        }
+                      } catch (sigError) {
+                        logger.warn({ error: sigError }, 'Error processing signature');
                         continue;
                       }
                       
                       logger.debug({
                         signature_type: typeof signature,
-                        signature_length: signature.length,
-                        signature_prefix: signature.substring(0, 10)
+                        is_buffer: Buffer.isBuffer(signature),
+                        signature_length: signature ? (Buffer.isBuffer(signature) ? signature.length : signature.length) : 0,
+                        signature_preview: Buffer.isBuffer(signature) ? 
+                          signature.slice(0, 5).toString('hex') : 
+                          (typeof signature === 'string' ? signature.substring(0, 10) : 'unknown')
                       }, 'Extracted signature from proof');
                       
-                      // Create token data
-                      const data = JSON.stringify({ id: proof.s });
+                      // Create token data - preserve raw Buffer/Uint8Array if present
+                      let data;
+                      if (Buffer.isBuffer(proof.s) || proof.s instanceof Uint8Array) {
+                        // Create an object with the raw buffer as the id
+                        data = { id: proof.s };
+                      } else {
+                        // Standard string case - use JSON
+                        data = JSON.stringify({ id: secretId });
+                      }
                       
-                      // Verify this token
-                      await verifyAndAddTokenComponents(
-                        data, signature, keyId, 
-                        results, totalValue
-                      );
+                      // Verify this token - handle data differently based on type
+                      if (typeof data === 'string') {
+                        await verifyAndAddTokenComponents(
+                          data, signature, keyId, 
+                          results, totalValue
+                        );
+                      } else {
+                        // For object data, we need to pass it directly
+                        await verifyAndAddTokenComponents(
+                          data, signature, keyId, 
+                          results, totalValue
+                        );
+                      }
                     } catch (proofError) {
                       logger.warn({ error: proofError }, 'Error processing proof in token group');
                     }
@@ -666,27 +743,58 @@ async function verifyToken(req, res) {
             }
             
             try {
+              // Add detailed debugging of all inputs
+              logger.debug({
+                dataType: typeof data,
+                dataIsObject: typeof data === 'object' && data !== null,
+                dataIsString: typeof data === 'string',
+                signatureType: typeof signature,
+                signatureIsBuffer: Buffer.isBuffer(signature),
+                signatureLength: signature ? (typeof signature === 'string' ? signature.length : 
+                  (Buffer.isBuffer(signature) ? signature.length : 'unknown')) : 0,
+                keyIdType: typeof key_id,
+                keyIdLength: key_id ? key_id.length : 0
+              }, 'Token component verification inputs');
+              
               // Parse token data with better error handling
               let tokenData;
               try {
                 if (typeof data === 'string') {
                   tokenData = JSON.parse(data);
-                } else if (typeof data === 'object') {
+                  logger.debug('Successfully parsed string data to JSON');
+                } else if (typeof data === 'object' && data !== null) {
                   tokenData = data;
+                  logger.debug('Using object data directly');
                 } else {
                   throw new Error('Invalid data format');
                 }
               } catch (parseError) {
-                logger.warn({ error: parseError, dataPrefix: typeof data === 'string' ? data.substring(0, 30) : 'not a string' }, 
-                  'Failed to parse token data');
+                logger.warn({ 
+                  error: parseError, 
+                  errorMessage: parseError.message,
+                  dataType: typeof data,
+                  dataPrefix: typeof data === 'string' ? data.substring(0, 30) : 'not a string' 
+                }, 'Failed to parse token data');
                 return;
               }
               
-              // Ensure we have an ID
+              // Ensure we have an ID and log its format
               if (!tokenData || !tokenData.id) {
                 logger.warn('Token data missing ID');
                 return;
               }
+              
+              // Log details about the ID format
+              logger.debug({
+                idType: typeof tokenData.id,
+                idIsBuffer: Buffer.isBuffer(tokenData.id),
+                idIsUint8Array: tokenData.id instanceof Uint8Array,
+                idLength: tokenData.id ? (
+                  Buffer.isBuffer(tokenData.id) || tokenData.id instanceof Uint8Array ? 
+                  tokenData.id.length : 
+                  (typeof tokenData.id === 'string' ? tokenData.id.length : 'unknown')
+                ) : 0
+              }, 'Token ID format');
               
               logger.debug(`Verifying token with ID: ${tokenData.id}`);
               
@@ -709,14 +817,40 @@ async function verifyToken(req, res) {
                 totalValue.currency = denomination.currency;
               }
               
-              // Normalize data format for consistent hashing
-              const dataForHash = typeof data === 'string' ? data : JSON.stringify(data);
+              // Handle the secret ID properly for verification
+              // If the ID is a Buffer or Uint8Array, we need to use it directly
+              // If it's a string, we should hash it as before
               
-              // Recreate the token hash
-              const tokenHash = require('crypto')
-                .createHash('sha256')
-                .update(Buffer.from(dataForHash, 'utf8'))
-                .digest();
+              let tokenHash;
+              if (Buffer.isBuffer(tokenData.id) || tokenData.id instanceof Uint8Array) {
+                // For binary IDs, use the Buffer directly without hashing
+                // This is the format used in the CBOR bundled tokens
+                logger.debug('Using binary ID directly for verification without hashing');
+                const idBuffer = Buffer.isBuffer(tokenData.id) ? 
+                  tokenData.id : Buffer.from(tokenData.id);
+                
+                // For logging - don't hash for verification
+                logger.debug({
+                  idBufferLength: idBuffer.length,
+                  idBufferHex: idBuffer.toString('hex').substring(0, 16)
+                }, 'Binary ID details');
+                
+                // Use the ID directly as the "hash" (for binary format proofs)
+                tokenHash = idBuffer;
+              } else {
+                // For string IDs, normalize and hash as before
+                const dataForHash = typeof data === 'string' ? data : JSON.stringify(data);
+                logger.debug({
+                  usingStringHash: true,
+                  dataForHashPrefix: typeof dataForHash === 'string' ? dataForHash.substring(0, 30) : 'not string'
+                }, 'Using string hashing approach');
+                
+                // Recreate the token hash
+                tokenHash = require('crypto')
+                  .createHash('sha256')
+                  .update(Buffer.from(dataForHash, 'utf8'))
+                  .digest();
+              }
               
               // Handle multiple signature formats
               let signatureBuffer;
@@ -875,8 +1009,33 @@ async function verifyToken(req, res) {
               
               // Check if token has been redeemed
               const db = getDb();
+              let tokenDbId;
+              
+              // Normalize the token ID for database lookup
+              if (Buffer.isBuffer(tokenData.id) || tokenData.id instanceof Uint8Array) {
+                // Convert binary ID to hex string for database
+                tokenDbId = Buffer.isBuffer(tokenData.id) ? 
+                  tokenData.id.toString('hex') : 
+                  Buffer.from(tokenData.id).toString('hex');
+                  
+                logger.debug({
+                  usingBinaryId: true,
+                  normalizedIdLength: tokenDbId.length,
+                  normalizedIdPrefix: tokenDbId.substring(0, 16)
+                }, 'Normalized binary ID for database');
+              } else {
+                // String ID, use directly
+                tokenDbId = tokenData.id;
+                logger.debug({
+                  usingStringId: true,
+                  idLength: tokenDbId.length,
+                  idPrefix: tokenDbId.substring(0, 16)
+                }, 'Using string ID for database');
+              }
+              
+              // Query using normalized ID
               const redeemedToken = await db('ec_redeemed_tokens')
-                .where('id', tokenData.id)
+                .where('id', tokenDbId)
                 .first();
               
               if (redeemedToken) {
@@ -885,8 +1044,15 @@ async function verifyToken(req, res) {
               }
               
               // Token is valid, add to results
+              // Make sure the token ID is usable in JSON (convert binary to hex if needed)
+              const displayTokenId = Buffer.isBuffer(tokenData.id) || tokenData.id instanceof Uint8Array ? 
+                (Buffer.isBuffer(tokenData.id) ? 
+                  tokenData.id.toString('hex') : 
+                  Buffer.from(tokenData.id).toString('hex')) : 
+                tokenData.id;
+              
               results.push({
-                token_id: tokenData.id,
+                token_id: displayTokenId,
                 denomination: {
                   id: denomination.id,
                   value: denomination.value,
@@ -2842,8 +3008,29 @@ async function verifyAndAddECTokenComponents(data, signature, key_id, results, t
       totalValue.currency = keyset.currency;
     }
     
-    // The secret is the token ID
-    const secret = tokenData.id;
+    // Handle the secret ID properly for verification
+    let secret;
+    if (Buffer.isBuffer(tokenData.id) || tokenData.id instanceof Uint8Array) {
+      // For binary IDs, use the Buffer directly without modification
+      // This is the format used in the CBOR bundled tokens
+      logger.debug('Using binary ID directly for EC verification');
+      secret = Buffer.isBuffer(tokenData.id) ? 
+        tokenData.id : Buffer.from(tokenData.id);
+      
+      // Log for debugging
+      logger.debug({
+        idBufferLength: secret.length,
+        idBufferHex: secret.toString('hex').substring(0, 16)
+      }, 'Binary EC ID details');
+    } else {
+      // String ID - use directly
+      secret = tokenData.id;
+      logger.debug({
+        secretType: typeof secret,
+        secretLength: secret.length,
+        secretPrefix: secret.substring(0, 16)
+      }, 'Using string ID for EC verification');
+    }
     
     // The signature might be in hex or base64, convert as appropriate
     let signatureBuffer;
@@ -2862,10 +3049,18 @@ async function verifyAndAddECTokenComponents(data, signature, key_id, results, t
       }
     } else if (Buffer.isBuffer(signature)) {
       signatureBuffer = signature;
+    } else if (signature instanceof Uint8Array) {
+      signatureBuffer = Buffer.from(signature);
     } else {
       logger.warn('EC signature is in an unknown format');
       return;
     }
+    
+    // Log signature details
+    logger.debug({
+      signatureBufferLength: signatureBuffer.length,
+      signatureBufferHex: signatureBuffer.slice(0, 5).toString('hex')
+    }, 'EC Signature details');
     
     // Convert private key to buffer
     const privateKeyBuffer = Buffer.from(keyPair.privateKey, 'hex');
@@ -2904,8 +3099,32 @@ async function verifyAndAddECTokenComponents(data, signature, key_id, results, t
       });
     }
     
+    // Normalize the token ID for database lookup
+    let tokenDbId;
+    if (Buffer.isBuffer(tokenData.id) || tokenData.id instanceof Uint8Array) {
+      // Convert binary ID to hex string for database
+      tokenDbId = Buffer.isBuffer(tokenData.id) ? 
+        tokenData.id.toString('hex') : 
+        Buffer.from(tokenData.id).toString('hex');
+        
+      logger.debug({
+        usingBinaryId: true,
+        normalizedIdLength: tokenDbId.length,
+        normalizedIdPrefix: tokenDbId.substring(0, 16)
+      }, 'Normalized binary EC ID for database');
+    } else {
+      // String ID, use directly
+      tokenDbId = tokenData.id;
+      logger.debug({
+        usingStringId: true,
+        idLength: tokenDbId.length,
+        idPrefix: tokenDbId.substring(0, 16)
+      }, 'Using string EC ID for database');
+    }
+    
+    // Query using normalized ID
     const redeemedToken = await db('ec_redeemed_tokens')
-      .where('id', tokenData.id)
+      .where('id', tokenDbId)
       .first();
     
     if (redeemedToken) {
@@ -2914,8 +3133,22 @@ async function verifyAndAddECTokenComponents(data, signature, key_id, results, t
     }
     
     // Token is valid, add to results
+    // Make sure the token ID is usable in JSON (convert binary to hex if needed)
+    const displayTokenId = Buffer.isBuffer(tokenData.id) || tokenData.id instanceof Uint8Array ? 
+      (Buffer.isBuffer(tokenData.id) ? 
+        tokenData.id.toString('hex') : 
+        Buffer.from(tokenData.id).toString('hex')) : 
+      tokenData.id;
+      
+    logger.debug({
+      originalIdType: typeof tokenData.id,
+      originalIdIsBuffer: Buffer.isBuffer(tokenData.id),
+      displayIdType: typeof displayTokenId,
+      displayIdLength: displayTokenId.length
+    }, 'Normalized token ID for results');
+    
     results.push({
-      token_id: tokenData.id,
+      token_id: displayTokenId,
       token_type: 'ec',
       keyset: {
         id: keyset.id,
