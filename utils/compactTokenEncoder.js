@@ -22,9 +22,10 @@ const tokenEncoder = require('./tokenEncoder');
  * Bundles multiple tokens into a single compact CBOR encoded bundle
  * using space-efficient encoding inspired by Cashu v4
  * @param {Array<string>} tokens - Array of encoded tokens
+ * @param {string} [customPrefix] - Optional custom prefix to use instead of the default
  * @returns {string} The compact token bundle as base64url
  */
-function bundleTokensCompact(tokens) {
+function bundleTokensCompact(tokens, customPrefix) {
   if (!Array.isArray(tokens) || tokens.length === 0) {
     throw new Error('Tokens must be a non-empty array');
   }
@@ -72,7 +73,11 @@ function bundleTokensCompact(tokens) {
   // Encode as CBOR and then as base64url
   try {
     const cborBundle = cbor.encode(bundle);
-    return Buffer.from(cborBundle).toString('base64url');
+    const encodedBundle = Buffer.from(cborBundle).toString('base64url');
+    
+    // Add the token prefix (either custom or from config)
+    const prefix = customPrefix || config.token.prefix;
+    return `${prefix}${encodedBundle}`;
   } catch (error) {
     throw new Error(`Failed to encode compact token bundle: ${error.message}`);
   }
@@ -85,8 +90,14 @@ function bundleTokensCompact(tokens) {
  */
 function unbundleTokensCompact(bundle) {
   try {
+    // Remove prefix if present
+    let processedBundle = bundle;
+    if (bundle.startsWith(config.token.prefix)) {
+      processedBundle = bundle.substring(config.token.prefix.length);
+    }
+    
     // Decode base64url
-    const bundleBuffer = Buffer.from(bundle, 'base64url');
+    const bundleBuffer = Buffer.from(processedBundle, 'base64url');
     
     // Decode CBOR
     const bundleObj = cbor.decode(bundleBuffer);

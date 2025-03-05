@@ -20,7 +20,7 @@ const useCompactEncoding = true;
  */
 async function createToken(req, res) {
   try {
-    const { amount } = req.body;
+    const { amount, custom_prefix } = req.body;
     
     if (!amount || isNaN(parseInt(amount, 10)) || parseInt(amount, 10) <= 0) {
       return res.status(400).json({
@@ -32,6 +32,12 @@ async function createToken(req, res) {
     }
     
     const amountInt = parseInt(amount, 10);
+    
+    // Use custom prefix if provided
+    let tokenPrefix = config.token.prefix;
+    if (custom_prefix) {
+      tokenPrefix = custom_prefix;
+    }
     
     // Get optimal combination of denominations
     const denominationCombination = changeMaker.getOptimalCombination(amountInt, config.denominations);
@@ -82,7 +88,8 @@ async function createToken(req, res) {
           keyId: activeKey.id,
           denomination: parseInt(denomination, 10),
           secret: secret.toString('hex'),
-          signature: unblindedSignature.toString('hex')
+          signature: unblindedSignature.toString('hex'),
+          prefix: tokenPrefix // Use custom prefix if specified
         });
         
         tokens.push(token);
@@ -91,8 +98,8 @@ async function createToken(req, res) {
     
     // Bundle tokens and return
     const tokenBundle = useCompactEncoding
-      ? compactTokenEncoder.bundleTokensCompact(tokens)
-      : tokenEncoder.bundleTokens(tokens);
+      ? compactTokenEncoder.bundleTokensCompact(tokens, tokenPrefix)
+      : tokenEncoder.bundleTokens(tokens, tokenPrefix);
     
     res.status(201).json({
       success: true,

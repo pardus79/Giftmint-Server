@@ -35,8 +35,11 @@ function encodeToken(token) {
   const tokenJson = JSON.stringify(tokenObj);
   const tokenBase64 = Buffer.from(tokenJson).toString('base64url');
   
+  // Use custom prefix if provided, otherwise use default
+  const prefix = token.prefix || config.token.prefix;
+  
   // Add token prefix
-  return `${config.token.prefix}_${tokenBase64}`;
+  return `${prefix}_${tokenBase64}`;
 }
 
 /**
@@ -45,12 +48,30 @@ function encodeToken(token) {
  * @returns {Object} The decoded token
  */
 function decodeToken(encodedToken) {
-  // Validate and remove prefix
-  if (!encodedToken.startsWith(`${config.token.prefix}_`)) {
-    throw new Error(`Invalid token. Expected prefix ${config.token.prefix}_`);
-  }
+  // Check if token has a recognized prefix
+  const defaultPrefix = `${config.token.prefix}_`;
+  let tokenBase64;
   
-  const tokenBase64 = encodedToken.substring(config.token.prefix.length + 1);
+  // Try default prefix first
+  if (encodedToken.startsWith(defaultPrefix)) {
+    tokenBase64 = encodedToken.substring(defaultPrefix.length);
+  } else {
+    // Try other common prefixes if the default doesn't match
+    const commonPrefixes = ['GM_', 'btcpins_', 'giftmint_'];
+    let foundPrefix = false;
+    
+    for (const prefix of commonPrefixes) {
+      if (encodedToken.startsWith(prefix)) {
+        tokenBase64 = encodedToken.substring(prefix.length);
+        foundPrefix = true;
+        break;
+      }
+    }
+    
+    if (!foundPrefix) {
+      throw new Error(`Invalid token. Expected recognized prefix`);
+    }
+  }
   
   // Decode base64
   const tokenJson = Buffer.from(tokenBase64, 'base64url').toString('utf8');
@@ -97,9 +118,10 @@ function generateTokenId(secret) {
 /**
  * Bundles multiple tokens into a single CBOR encoded bundle
  * @param {Array<string>} tokens - Array of encoded tokens
+ * @param {string} [customPrefix] - Optional custom prefix to use instead of the default
  * @returns {string} The token bundle as base64
  */
-function bundleTokens(tokens) {
+function bundleTokens(tokens, customPrefix) {
   if (!Array.isArray(tokens) || tokens.length === 0) {
     throw new Error('Tokens must be a non-empty array');
   }
@@ -137,7 +159,11 @@ function bundleTokens(tokens) {
   // Encode as CBOR and then as base64
   try {
     const cborBundle = cbor.encode(bundle);
-    return Buffer.from(cborBundle).toString('base64url');
+    const base64Bundle = Buffer.from(cborBundle).toString('base64url');
+    
+    // Add the token prefix (either custom or from config)
+    const prefix = customPrefix || config.token.prefix;
+    return `${prefix}${base64Bundle}`;
   } catch (error) {
     throw new Error(`Failed to encode token bundle: ${error.message}`);
   }
@@ -150,8 +176,25 @@ function bundleTokens(tokens) {
  */
 function unbundleTokens(bundle) {
   try {
+    // Remove the prefix if present
+    let processedBundle = bundle;
+    
+    // Check for the config prefix first
+    if (processedBundle.startsWith(config.token.prefix)) {
+      processedBundle = processedBundle.substring(config.token.prefix.length);
+    } else {
+      // If not the default prefix, iterate through possible common prefixes
+      const commonPrefixes = ['GM', 'btcpins', 'giftmint'];
+      for (const prefix of commonPrefixes) {
+        if (processedBundle.startsWith(prefix)) {
+          processedBundle = processedBundle.substring(prefix.length);
+          break;
+        }
+      }
+    }
+    
     // Decode base64
-    const bundleBuffer = Buffer.from(bundle, 'base64url');
+    const bundleBuffer = Buffer.from(processedBundle, 'base64url');
     
     // Decode CBOR
     const bundleObj = cbor.decode(bundleBuffer);
