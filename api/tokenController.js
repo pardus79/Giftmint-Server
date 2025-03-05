@@ -2000,7 +2000,7 @@ async function createECToken(req, res) {
           logger.info(`Creating EC token for keyset: ${keyset.id} (${keyset.value} ${keyset.currency})`);
           
           // Create token request with proper keyset ID
-          const tokenRequest = ecBlindSignature.createTokenRequest(keyset.id);
+          const tokenRequest = blindSignature.createTokenRequest(keyset.id);
           
           logger.debug(`Created EC token request with ID: ${tokenRequest.id}`);
           
@@ -2009,13 +2009,13 @@ async function createECToken(req, res) {
           
           // Sign the blinded message
           const blindedMessage = Buffer.from(tokenRequest.blindedMessage, 'hex');
-          const signature = ecBlindSignature.signBlindedMessage(blindedMessage, privateKey);
+          const signature = blindSignature.signBlindedMessage(blindedMessage, privateKey);
           
           logger.debug(`Signed EC token request with ID: ${tokenRequest.id}`);
           
           try {
             // Process the signed token
-            const finishedToken = ecBlindSignature.processSignedToken(
+            const finishedToken = blindSignature.processSignedToken(
               tokenRequest,
               signature.toString('hex'),
               tokenKeyPair.publicKey
