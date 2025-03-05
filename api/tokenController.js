@@ -146,8 +146,9 @@ async function createToken(req, res) {
             logger.debug(`Created token request with ID: ${tokenRequest.id}`);
             
             // Sign the blinded message
-            const blindedMessage = Buffer.from(tokenRequest.blindedMessage, 'hex');
-            const privateKey = Buffer.from(tokenKeyPair.privateKey, 'hex');
+            // Convert to Uint8Array for the secp256k1 library
+            const blindedMessage = Uint8Array.from(Buffer.from(tokenRequest.blindedMessage, 'hex'));
+            const privateKey = Uint8Array.from(Buffer.from(tokenKeyPair.privateKey, 'hex'));
             const signature = blindSignature.signBlindedMessage(blindedMessage, privateKey);
             
             logger.debug(`Signed token request with ID: ${tokenRequest.id}`);
@@ -283,8 +284,9 @@ async function createToken(req, res) {
     const tokenRequest = blindSignature.createTokenRequest(keyPair.keysetId);
     
     // Sign the blinded message - we don't store tokens until they're redeemed
-    const blindedMessage = Buffer.from(tokenRequest.blindedMessage, 'hex');
-    const privateKey = Buffer.from(keyPair.privateKey, 'hex');
+    // Convert to Uint8Array for the secp256k1 library
+    const blindedMessage = Uint8Array.from(Buffer.from(tokenRequest.blindedMessage, 'hex'));
+    const privateKey = Uint8Array.from(Buffer.from(keyPair.privateKey, 'hex'));
     const signature = blindSignature.signBlindedMessage(blindedMessage, privateKey);
     
     // Update aggregate token stats for this denomination
@@ -1231,8 +1233,9 @@ async function remintToken(req, res) {
       logger.info('Created new token request with the same denomination');
       
       // Sign the new token immediately (privacy-preserving approach)
-      const blindedMessage = Buffer.from(newTokenRequest.blindedMessage, 'hex');
-      const privateKey = Buffer.from(keyPair.privateKey, 'hex');
+      // Convert to Uint8Array for the secp256k1 library
+      const blindedMessage = Uint8Array.from(Buffer.from(newTokenRequest.blindedMessage, 'hex'));
+      const privateKey = Uint8Array.from(Buffer.from(keyPair.privateKey, 'hex'));
       const newSignature = blindSignature.signBlindedMessage(
         blindedMessage, 
         privateKey
@@ -1387,8 +1390,9 @@ async function bulkCreateTokens(req, res) {
         });
         
         // Sign the blinded message
-        const blindedMessage = Buffer.from(tokenRequest.blindedMessage, 'hex');
-        const privateKey = Buffer.from(keyPair.privateKey, 'hex');
+        // Convert to Uint8Array for the secp256k1 library
+        const blindedMessage = Uint8Array.from(Buffer.from(tokenRequest.blindedMessage, 'hex'));
+        const privateKey = Uint8Array.from(Buffer.from(keyPair.privateKey, 'hex'));
         const signature = blindSignature.signBlindedMessage(blindedMessage, privateKey);
         
         // Update token status in database
@@ -1762,8 +1766,10 @@ async function splitTokenImplementation(req, res) {
         });
         
         // Sign the blinded token
-        const blindedTokenBuffer = Buffer.from(changeTokenRequest.blindedToken, 'base64');
-        const changeSignature = blindSignature.signBlindedMessage(blindedTokenBuffer, changeKeyPair.privateKey);
+        // Convert to Uint8Array for the secp256k1 library
+        const blindedTokenBuffer = Uint8Array.from(Buffer.from(changeTokenRequest.blindedToken, 'base64'));
+        const privateKey = Uint8Array.from(Buffer.from(changeKeyPair.privateKey, 'hex'));
+        const changeSignature = blindSignature.signBlindedMessage(blindedTokenBuffer, privateKey);
         
         // Update token status in database
         await trx('tokens')
@@ -2004,11 +2010,12 @@ async function createECToken(req, res) {
           
           logger.debug(`Created EC token request with ID: ${tokenRequest.id}`);
           
-          // Get the private key as a Buffer
-          const privateKey = Buffer.from(tokenKeyPair.privateKey, 'hex');
+          // Get the private key as a Uint8Array
+          const privateKey = Uint8Array.from(Buffer.from(tokenKeyPair.privateKey, 'hex'));
           
           // Sign the blinded message
-          const blindedMessage = Buffer.from(tokenRequest.blindedMessage, 'hex');
+          // Convert the blinded message from hex string to Uint8Array for the secp256k1 library
+          const blindedMessage = Uint8Array.from(Buffer.from(tokenRequest.blindedMessage, 'hex'));
           const signature = blindSignature.signBlindedMessage(blindedMessage, privateKey);
           
           logger.debug(`Signed EC token request with ID: ${tokenRequest.id}`);
@@ -2155,12 +2162,13 @@ async function createECToken(req, res) {
     }
     
     // Create token request
-    const tokenRequest = ecBlindSignature.createTokenRequest(keyPair.keysetId);
+    const tokenRequest = blindSignature.createTokenRequest(keyPair.keysetId);
     
     // Sign the blinded message
-    const blindedMessage = Buffer.from(tokenRequest.blindedMessage, 'hex');
-    const privateKey = Buffer.from(keyPair.privateKey, 'hex');
-    const signature = ecBlindSignature.signBlindedMessage(blindedMessage, privateKey);
+    // Convert to Uint8Array for the secp256k1 library
+    const blindedMessage = Uint8Array.from(Buffer.from(tokenRequest.blindedMessage, 'hex'));
+    const privateKey = Uint8Array.from(Buffer.from(keyPair.privateKey, 'hex'));
+    const signature = blindSignature.signBlindedMessage(blindedMessage, privateKey);
     
     // Update token stats
     try {

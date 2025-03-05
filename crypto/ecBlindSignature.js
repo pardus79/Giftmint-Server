@@ -59,12 +59,12 @@ function hashToCurve(message) {
     
     // Check if it's a valid secp256k1 point
     try {
-      if (secp256k1.publicKeyVerify(candidateKey)) {
+      if (secp256k1.publicKeyVerify(Uint8Array.from(candidateKey))) {
         logger.debug({
           counter,
           candidateKeyPrefix: candidateKey.slice(0, 5).toString('hex')
         }, 'Found valid curve point');
-        return candidateKey;
+        return Uint8Array.from(candidateKey);
       }
     } catch (error) {
       // Not a valid point, try next counter
@@ -120,26 +120,28 @@ function generateToken() {
  */
 function blindMessage(Y, blindingFactor) {
   try {
-    // Ensure Y is a valid public key
-    if (!secp256k1.publicKeyVerify(Y)) {
+    // Ensure Y is a valid public key (convert to Uint8Array if needed)
+    const Y_uint8 = Uint8Array.from(Y);
+    if (!secp256k1.publicKeyVerify(Y_uint8)) {
       throw new Error('Invalid point Y');
     }
     
-    // Ensure blinding factor is a valid scalar
-    if (!secp256k1.privateKeyVerify(blindingFactor)) {
+    // Ensure blinding factor is a valid scalar (convert to Uint8Array if needed)
+    const blindingFactor_uint8 = Uint8Array.from(blindingFactor);
+    if (!secp256k1.privateKeyVerify(blindingFactor_uint8)) {
       throw new Error('Invalid blinding factor');
     }
     
     // Generate point rG (blinding factor * generator)
-    const rG = secp256k1.publicKeyCreate(blindingFactor);
+    const rG = secp256k1.publicKeyCreate(blindingFactor_uint8);
     
     // Calculate B_ = Y + rG (point addition)
-    const B_ = secp256k1.publicKeyCombine([Y, rG]);
+    const B_ = secp256k1.publicKeyCombine([Y_uint8, rG]);
     
     logger.debug({
-      YPrefix: Y.slice(0, 5).toString('hex'),
-      rGPrefix: rG.slice(0, 5).toString('hex'),
-      B_Prefix: B_.slice(0, 5).toString('hex')
+      YPrefix: Buffer.from(Y_uint8).slice(0, 5).toString('hex'),
+      rGPrefix: Buffer.from(rG).slice(0, 5).toString('hex'),
+      B_Prefix: Buffer.from(B_).slice(0, 5).toString('hex')
     }, 'Blinded message');
     
     return B_;
@@ -172,8 +174,8 @@ function signBlindedMessage(B_, k) {
     const C_ = secp256k1.publicKeyTweakMul(B_, k);
     
     logger.debug({
-      B_Prefix: B_.slice(0, 5).toString('hex'),
-      C_Prefix: C_.slice(0, 5).toString('hex')
+      B_Prefix: Buffer.from(B_).slice(0, 5).toString('hex'),
+      C_Prefix: Buffer.from(C_).slice(0, 5).toString('hex')
     }, 'Generated blind signature');
     
     return C_;
@@ -193,34 +195,37 @@ function signBlindedMessage(B_, k) {
  */
 function unblindSignature(C_, blindingFactor, K) {
   try {
-    // Ensure C_ is a valid point
-    if (!secp256k1.publicKeyVerify(C_)) {
+    // Ensure C_ is a valid point (convert to Uint8Array if needed)
+    const C_uint8 = Uint8Array.from(C_);
+    if (!secp256k1.publicKeyVerify(C_uint8)) {
       throw new Error('Invalid blind signature C_');
     }
     
-    // Ensure blinding factor is a valid scalar
-    if (!secp256k1.privateKeyVerify(blindingFactor)) {
+    // Ensure blinding factor is a valid scalar (convert to Uint8Array if needed)
+    const blindingFactor_uint8 = Uint8Array.from(blindingFactor);
+    if (!secp256k1.privateKeyVerify(blindingFactor_uint8)) {
       throw new Error('Invalid blinding factor');
     }
     
-    // Ensure K is a valid point
-    if (!secp256k1.publicKeyVerify(K)) {
+    // Ensure K is a valid point (convert to Uint8Array if needed)
+    const K_uint8 = Uint8Array.from(K);
+    if (!secp256k1.publicKeyVerify(K_uint8)) {
       throw new Error('Invalid public key K');
     }
     
     // Calculate rK (point multiplication)
-    const rK = secp256k1.publicKeyTweakMul(K, blindingFactor);
+    const rK = secp256k1.publicKeyTweakMul(K_uint8, blindingFactor_uint8);
     
     // Negate rK (for point subtraction)
     const negRK = secp256k1.publicKeyNegate(rK);
     
     // Calculate C = C_ - rK (point addition with negated rK)
-    const C = secp256k1.publicKeyCombine([C_, negRK]);
+    const C = secp256k1.publicKeyCombine([C_uint8, negRK]);
     
     logger.debug({
-      C_Prefix: C_.slice(0, 5).toString('hex'),
-      rKPrefix: rK.slice(0, 5).toString('hex'),
-      CPrefix: C.slice(0, 5).toString('hex')
+      C_Prefix: Buffer.from(C_uint8).slice(0, 5).toString('hex'),
+      rKPrefix: Buffer.from(rK).slice(0, 5).toString('hex'),
+      CPrefix: Buffer.from(C).slice(0, 5).toString('hex')
     }, 'Unblinded signature');
     
     return C;
@@ -243,16 +248,21 @@ function verifySignature(secret, C, k) {
     // Map secret to curve point
     const Y = hashToCurve(secret);
     
+    // Convert inputs to Uint8Array for the secp256k1 library
+    const Y_uint8 = Uint8Array.from(Y);
+    const k_uint8 = Uint8Array.from(k);
+    const C_uint8 = Uint8Array.from(C);
+    
     // Calculate expected signature kY
-    const expectedC = secp256k1.publicKeyTweakMul(Y, k);
+    const expectedC = secp256k1.publicKeyTweakMul(Y_uint8, k_uint8);
     
     // Compare signatures (must compare hex strings as Buffer comparison is reference-based)
-    const isValid = C.toString('hex') === expectedC.toString('hex');
+    const isValid = Buffer.from(C_uint8).toString('hex') === Buffer.from(expectedC).toString('hex');
     
     logger.debug({
-      YPrefix: Y.slice(0, 5).toString('hex'),
-      CPrefix: C.slice(0, 5).toString('hex'),
-      expectedCPrefix: expectedC.slice(0, 5).toString('hex'),
+      YPrefix: Buffer.from(Y_uint8).slice(0, 5).toString('hex'),
+      CPrefix: Buffer.from(C_uint8).slice(0, 5).toString('hex'),
+      expectedCPrefix: Buffer.from(expectedC).slice(0, 5).toString('hex'),
       isValid
     }, 'Verified signature');
     
@@ -304,9 +314,10 @@ function createTokenRequest(keysetId) {
 function processSignedToken(tokenRequest, blindSignature, publicKey) {
   try {
     // Decode blind signature and blinding factor
-    const C_ = Buffer.from(blindSignature, 'hex');
-    const blindingFactor = Buffer.from(tokenRequest.blindingFactor, 'hex');
-    const K = Buffer.from(publicKey, 'hex');
+    // Convert all inputs to Uint8Array for secp256k1 compatibility
+    const C_ = Uint8Array.from(Buffer.from(blindSignature, 'hex'));
+    const blindingFactor = Uint8Array.from(Buffer.from(tokenRequest.blindingFactor, 'hex'));
+    const K = Uint8Array.from(Buffer.from(publicKey, 'hex'));
     
     // Unblind the signature
     const C = unblindSignature(C_, blindingFactor, K);
@@ -314,7 +325,7 @@ function processSignedToken(tokenRequest, blindSignature, publicKey) {
     // Verify signature correctness
     // Note: Full verification requires the private key, which we don't have on the client side
     // This is just a basic structure check
-    if (!secp256k1.publicKeyVerify(C)) {
+    if (!secp256k1.publicKeyVerify(Uint8Array.from(C))) {
       throw new Error('Invalid unblinded signature structure');
     }
     
