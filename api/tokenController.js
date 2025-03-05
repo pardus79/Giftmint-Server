@@ -2051,6 +2051,18 @@ async function createECToken(req, res) {
           logger.debug(`Signed EC token request with ID: ${tokenRequest.id}`);
           
           try {
+            // Extra debug logging for signature and public key
+            logger.info({
+              signatureType: typeof signature,
+              signatureIsUint8Array: signature instanceof Uint8Array,
+              signatureLength: signature ? signature.length : 0,
+              signatureHexLength: signature ? signature.toString('hex').length : 0,
+              publicKeyType: typeof tokenKeyPair.publicKey,
+              publicKeyLength: tokenKeyPair.publicKey ? tokenKeyPair.publicKey.length : 0,
+              tokenRequestId: tokenRequest.id,
+              blindingFactorLength: tokenRequest.blindingFactor ? tokenRequest.blindingFactor.length : 0
+            }, 'Debug before processSignedToken');
+            
             // Process the signed token
             const finishedToken = blindSignature.processSignedToken(
               tokenRequest,
@@ -2059,6 +2071,11 @@ async function createECToken(req, res) {
             );
             
             logger.debug(`Processed signed EC token with ID: ${tokenRequest.id}`);
+            
+            // Extra validation for finishedToken
+            if (!finishedToken || !finishedToken.signature) {
+              throw new Error('Invalid finished token returned from processSignedToken');
+            }
             
             // Create token object
             const tokenObject = {
