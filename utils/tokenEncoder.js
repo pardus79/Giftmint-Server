@@ -82,6 +82,16 @@ async function bundleTokens(tokens, customPrefix) {
     
     logger.debug(`Bundling ${tokens.length} tokens using Cashu TokenV4 format`);
     
+    // Log token info for debugging
+    for (let i = 0; i < Math.min(tokens.length, 6); i++) {
+      const token = tokens[i];
+      logger.debug({ 
+        tokenIndex: i,
+        tokenPrefix: token.substring(0, 20) + '...',
+        tokenLength: token.length
+      }, 'Token for bundling');
+    }
+    
     // First decode all tokens to extract their data for bundling
     const decodedTokens = [];
     for (const token of tokens) {
@@ -141,6 +151,17 @@ async function bundleTokens(tokens, customPrefix) {
       }
       tokensByKeyId[token.keyId].push(token);
     }
+    
+    // Log decoded tokens and grouping results
+    logger.debug({
+      decodedCount: decodedTokens.length,
+      uniqueKeyIds: Object.keys(tokensByKeyId).length,
+      keyIdList: Object.keys(tokensByKeyId).map(id => id.substring(0, 8) + '...'),
+      groupCounts: Object.keys(tokensByKeyId).map(keyId => ({
+        keyId: keyId.substring(0, 8) + '...',
+        count: tokensByKeyId[keyId].length
+      }))
+    }, 'Token grouping results');
     
     // Construct exact Cashu TokenV4 format:
     // {
