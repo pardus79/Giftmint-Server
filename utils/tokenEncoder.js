@@ -418,54 +418,88 @@ function unbundleTokens(bundleString) {
           // Decode the base64 string to get CBOR data
           const bundleBuffer = Buffer.from(standardBase64, 'base64');
           
-          // Decode CBOR
-          const cborBundle = cbor.decodeFirstSync(bundleBuffer);
-          logger.debug({ 
-            cborFormat: true,
-            mintInfo: cborBundle.m,
-            tokenGroups: cborBundle.t ? cborBundle.t.length : 0
-          }, 'Successfully decoded CBOR bundle');
-          
-          // Process the CBOR bundle to recreate tokens
-          const prefix = bundleString.substring(0, prefixEnd);
-          const recreatedTokens = [];
-          
-          // Process each token group (grouped by key_id)
-          if (cborBundle.t && Array.isArray(cborBundle.t)) {
-            for (const group of cborBundle.t) {
-              const keyId = group.i.toString('utf8');
-              
-              // Process each proof in this group
-              if (group.p && Array.isArray(group.p)) {
-                for (const proof of group.p) {
-                  const secretId = proof.s;
-                  const signature = proof.c.toString('utf8');
-                  
-                  // Recreate token data
-                  const tokenData = JSON.stringify({ id: secretId });
-                  
-                  // Recreate full token
-                  const fullToken = {
-                    data: tokenData,
-                    signature: signature,
-                    key_id: keyId
-                  };
-                  
-                  // Encode it back to compact format with proper prefix
-                  const encodedToken = encodeToken(fullToken, prefix);
-                  recreatedTokens.push(encodedToken);
+          try {
+            // Decode CBOR with better error handling and debugging
+            const cborBundle = cbor.decodeFirstSync(bundleBuffer);
+            logger.debug({ 
+              cborFormat: true,
+              mintInfo: cborBundle.m,
+              tokenGroups: cborBundle.t ? cborBundle.t.length : 0
+            }, 'Successfully decoded CBOR bundle');
+            
+            // Process the CBOR bundle to recreate tokens
+            const prefix = bundleString.substring(0, prefixEnd);
+            const recreatedTokens = [];
+            
+            // Process each token group (grouped by key_id)
+            if (cborBundle.t && Array.isArray(cborBundle.t)) {
+              for (const group of cborBundle.t) {
+                const keyId = group.i.toString('utf8');
+                
+                // Process each proof in this group
+                if (group.p && Array.isArray(group.p)) {
+                  for (const proof of group.p) {
+                    const secretId = proof.s;
+                    const signature = proof.c.toString('utf8');
+                    
+                    // Recreate token data
+                    const tokenData = JSON.stringify({ id: secretId });
+                    
+                    // Recreate full token
+                    const fullToken = {
+                      data: tokenData,
+                      signature: signature,
+                      key_id: keyId
+                    };
+                    
+                    // Encode it back to compact format with proper prefix
+                    const encodedToken = encodeToken(fullToken, prefix);
+                    recreatedTokens.push(encodedToken);
+                  }
                 }
               }
             }
+            
+            // Return in a format compatible with other bundle types
+            return {
+              v: 4, // CBOR format version
+              t: recreatedTokens,
+              c: recreatedTokens.length,
+              format: 'cbor'
+            };
+          } catch (cborDecodeError) {
+            // Enhanced error handling with hexdump of the first few bytes for debugging
+            const hexDump = bundleBuffer.slice(0, 32).toString('hex').match(/.{1,2}/g).join(' ');
+            logger.error({ 
+              error: cborDecodeError, 
+              hexDump: hexDump,
+              bufferLength: bundleBuffer.length,
+              base64Sample: standardBase64.substring(0, 30)
+            }, 'CBOR decoding failed - data format may be incompatible');
+            
+            // If the bundle is very short, try parsing as a single token instead
+            if (bundleBuffer.length < 50) {
+              logger.warn('Bundle is very short, attempting to parse as single token');
+              const singleToken = bundleString;
+              return {
+                v: 1,
+                t: [singleToken],
+                c: 1,
+                format: 'single'
+              };
+            }
+            
+            // Attempt to fall back to JSON parsing instead
+            try {
+              // If we get here, try parsing as JSON
+              const jsonBundle = JSON.parse(bundleBuffer.toString('utf8'));
+              logger.debug('Successfully parsed bundle as JSON instead of CBOR');
+              return jsonBundle;
+            } catch (jsonError) {
+              logger.error({ error: jsonError }, 'Failed to parse as JSON as well');
+              throw cborDecodeError; // Re-throw the original CBOR error
+            }
           }
-          
-          // Return in a format compatible with other bundle types
-          return {
-            v: 4, // CBOR format version
-            t: recreatedTokens,
-            c: recreatedTokens.length,
-            format: 'cbor'
-          };
         }
       } catch (cborError) {
         logger.error({ error: cborError }, 'Failed to decode CBOR bundle, falling back to other formats');

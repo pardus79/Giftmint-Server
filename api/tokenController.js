@@ -408,10 +408,136 @@ async function verifyToken(req, res) {
       });
     }
     
-    console.log('Received token for verification:', token);
-    console.log('Token type:', typeof token);
+    logger.debug({ tokenPrefix: token.substring(0, 20) + '...' }, 'Received token for verification');
     
-    // Parse token - support both compact and raw JSON formats
+    // Check if this is a bundle - if so, handle it differently
+    if (token.includes('B') && (token.startsWith('btcpins') || token.startsWith('giftmint'))) {
+      logger.info('Detected bundle format, attempting to unbundle and verify tokens');
+      
+      // Extract tokens from the bundle
+      let unbundled;
+      try {
+        const { bundleTokens, unbundleTokens } = require('../utils/tokenEncoder');
+        unbundled = unbundleTokens(token);
+        
+        // If we get multiple tokens back, verify each one
+        if (unbundled && unbundled.t && Array.isArray(unbundled.t) && unbundled.t.length > 0) {
+          logger.debug(`Successfully unbundled token into ${unbundled.t.length} tokens`);
+          
+          // Verify each token in the bundle
+          const results = [];
+          const totalValue = { amount: 0, currency: null };
+          
+          for (const bundledToken of unbundled.t) {
+            try {
+              // Parse individual token
+              const parsed = decodeToken(bundledToken);
+              
+              // Extract components and verify
+              const { data, signature, key_id } = parsed;
+              
+              if (!data || !signature || !key_id) {
+                logger.warn('Skipping token with invalid structure');
+                continue;
+              }
+              
+              // Parse token data
+              const tokenData = JSON.parse(data);
+              
+              // Get key pair by ID
+              const keyPair = await keyManager.getKeyPairById(key_id);
+              if (!keyPair) {
+                logger.warn({ key_id }, 'Key pair not found');
+                continue;
+              }
+              
+              // Get denomination info
+              const denomination = await keyManager.getDenomination(keyPair.denominationId);
+              if (!denomination) {
+                logger.warn({ denominationId: keyPair.denominationId }, 'Denomination not found');
+                continue;
+              }
+              
+              // Set currency if not already set
+              if (!totalValue.currency) {
+                totalValue.currency = denomination.currency;
+              }
+              
+              // Recreate the token hash
+              const tokenHash = require('crypto')
+                .createHash('sha256')
+                .update(Buffer.from(data, 'utf8'))
+                .digest();
+              
+              // Verify signature
+              const isValid = blindSignature.verifySignature(
+                tokenHash,
+                Buffer.from(signature, 'base64'),
+                keyPair.publicKey
+              );
+              
+              if (!isValid) {
+                logger.warn({ token_id: tokenData.id }, 'Invalid signature');
+                continue;
+              }
+              
+              // Check if token has been redeemed
+              const db = getDb();
+              const redeemedToken = await db('redeemed_tokens')
+                .where('id', tokenData.id)
+                .first();
+              
+              if (redeemedToken) {
+                logger.warn({ token_id: tokenData.id }, 'Token already redeemed');
+                continue;
+              }
+              
+              // Token is valid, add to results
+              results.push({
+                token_id: tokenData.id,
+                denomination: {
+                  id: denomination.id,
+                  value: denomination.value,
+                  currency: denomination.currency,
+                  description: denomination.description
+                },
+                isValid: true
+              });
+              
+              // Add to total value
+              totalValue.amount += denomination.value;
+            } catch (tokenError) {
+              logger.error({ error: tokenError }, 'Error verifying bundled token');
+              // Continue to next token
+            }
+          }
+          
+          // Return all valid tokens
+          return res.status(200).json({
+            success: true,
+            bundle_verified: true,
+            valid_tokens: results,
+            token_count: results.length,
+            total_value: totalValue.amount,
+            currency: totalValue.currency || 'SATS'
+          });
+        } else {
+          logger.warn('No valid tokens found in bundle');
+          return res.status(400).json({
+            success: false,
+            message: 'No valid tokens found in bundle'
+          });
+        }
+      } catch (unbundleError) {
+        logger.error({ error: unbundleError }, 'Failed to unbundle token');
+        return res.status(400).json({
+          success: false,
+          message: 'Failed to unbundle token: ' + unbundleError.message
+        });
+      }
+    }
+    
+    // Handle single token verification for non-bundle cases
     let parsedToken;
     try {
       // Check if the token is a compact format with any prefix
@@ -419,22 +545,22 @@ async function verifyToken(req, res) {
           (token.startsWith('giftmint') || 
            token.startsWith('btcpins') || 
            token.startsWith(config.token.prefix))) {
-        console.log('Detected compact token format with prefix');
+        logger.debug('Detected compact token format with prefix');
         // Compact token format
         parsedToken = decodeToken(token);
       } else if (typeof token === 'string' && token.startsWith('{')) {
-        console.log('Detected JSON format token');
+        logger.debug('Detected JSON format token');
         // Legacy JSON format
         parsedToken = JSON.parse(token);
       } else {
-        console.log('Attempting to decode with generic approach');
+        logger.debug('Attempting to decode with generic approach');
         // Try generic approach
         parsedToken = decodeToken(token);
       }
       
-      console.log('Successfully parsed token:', parsedToken);
+      logger.debug('Successfully parsed token');
     } catch (e) {
-      console.log('Error parsing token:', e.message);
+      logger.error({ error: e }, 'Error parsing token');
       return res.status(400).json({
         success: false,
         message: 'Invalid token format: ' + e.message
