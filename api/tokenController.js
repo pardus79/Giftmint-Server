@@ -60,7 +60,7 @@ async function listDenominations(req, res) {
  */
 async function createToken(req, res) {
   try {
-    const { denomination_id, denomination_value, custom_prefix } = req.body;
+    const { denomination_id, denomination_value, custom_prefix, batch_id } = req.body;
     
     let keyPair;
     let denomination;
@@ -86,31 +86,63 @@ async function createToken(req, res) {
       keyPair.publicKey
     );
     
-    // Store token in database (no amount/currency in token itself, just the denomination link)
-    const db = getDb();
-    await db('tokens').insert({
-      id: tokenRequest.id,
-      denomination_id: keyPair.denominationId,
-      key_id: keyPair.id,
-      blinded_token: tokenRequest.blindedToken,
-      status: 'pending',
-      created_at: new Date(),
-      updated_at: new Date(),
-      expires_at: new Date(Date.now() + config.crypto.tokenExpiry * 1000)
-    });
-    
-    // Sign the blinded token
+    // Sign the blinded token - we no longer store tokens until they're redeemed
     const blindedTokenBuffer = Buffer.from(tokenRequest.blindedToken, 'base64');
     const signature = blindSignature.signBlindedMessage(blindedTokenBuffer, keyPair.privateKey);
     
-    // Update token status in database
-    await db('tokens')
-      .where('id', tokenRequest.id)
-      .update({
-        signed_token: signature.toString('base64'),
-        status: 'active',
-        updated_at: new Date()
-      });
+    // Update aggregate token stats for this denomination
+    const db = getDb();
+    try {
+      // Try to increment existing stats
+      const updated = await db('token_stats')
+        .where('denomination_id', keyPair.denominationId)
+        .increment('minted_count', 1)
+        .update('last_updated', db.fn.now());
+      
+      // If no row was updated, create new stats entry
+      if (!updated) {
+        await db('token_stats').insert({
+          denomination_id: keyPair.denominationId,
+          minted_count: 1,
+          redeemed_count: 0,
+          last_updated: db.fn.now()
+        });
+      }
+    } catch (statsError) {
+      // Log but continue - stats are secondary to token creation
+      logger.warn({ error: statsError }, 'Failed to update token stats');
+    }
+    
+    // Update batch stats if a batch_id was provided
+    if (batch_id) {
+      try {
+        // Check if the batch exists
+        const batch = await db('batch_stats')
+          .where('batch_id', batch_id)
+          .first();
+        
+        if (batch) {
+          // Update existing batch
+          await db('batch_stats')
+            .where('batch_id', batch_id)
+            .increment('total_value', denomination.value)
+            .update('last_updated', db.fn.now());
+        } else {
+          // Create new batch stats
+          await db('batch_stats').insert({
+            batch_id,
+            currency: denomination.currency,
+            total_value: denomination.value,
+            redeemed_value: 0,
+            created_at: db.fn.now(),
+            last_updated: db.fn.now()
+          });
+        }
+      } catch (batchError) {
+        // Log but continue - batch stats are secondary
+        logger.warn({ error: batchError }, 'Failed to update batch stats');
+      }
+    }
     
     // Process the signed token
     if (!tokenRequest.hashAlgo) {
@@ -253,16 +285,18 @@ async function verifyToken(req, res) {
       });
     }
     
-    // Check if token has been redeemed
+    // Check if token has been redeemed - now uses redeemed_tokens table
     const db = getDb();
-    const storedToken = await db('tokens')
+    const redeemedToken = await db('redeemed_tokens')
       .where('id', tokenData.id)
       .first();
     
-    if (storedToken && storedToken.status === 'redeemed') {
+    // Token is already redeemed if it exists in the redeemed_tokens table
+    if (redeemedToken) {
       return res.status(400).json({
         success: false,
-        message: 'Token has already been redeemed'
+        message: 'Token has already been redeemed',
+        redeemed_at: redeemedToken.redeemed_at
       });
     }
     
@@ -376,50 +410,51 @@ async function redeemToken(req, res) {
     const trx = await db.transaction();
     
     try {
-      // Check if token has been redeemed
-      const storedToken = await trx('tokens')
+      // Check if token has been redeemed - use redeemed_tokens table
+      const redeemedToken = await trx('redeemed_tokens')
         .where('id', tokenData.id)
         .first();
       
-      if (storedToken && storedToken.status === 'redeemed') {
+      if (redeemedToken) {
         await trx.rollback();
         return res.status(400).json({
           success: false,
-          message: 'Token has already been redeemed'
+          message: 'Token has already been redeemed',
+          redeemed_at: redeemedToken.redeemed_at
         });
       }
       
-      // If token isn't in the database yet, add it
-      if (!storedToken) {
-        await trx('tokens').insert({
-          id: tokenData.id,
-          denomination_id: keyPair.denominationId,
-          key_id: key_id,
-          blinded_token: '',
-          signed_token: signature,
-          status: 'pending',
-          created_at: new Date(),
-          updated_at: new Date(),
-          expires_at: new Date(Date.now() + config.crypto.tokenExpiry * 1000)
-        });
-      }
+      // Store the token in redeemed_tokens table
+      const now = new Date();
+      await trx('redeemed_tokens').insert({
+        id: tokenData.id,
+        denomination_id: keyPair.denominationId,
+        key_id: key_id,
+        redeemed_at: now
+      });
       
-      // Mark token as redeemed
-      await trx('tokens')
-        .where('id', tokenData.id)
-        .update({
-          status: 'redeemed',
-          redeemed_at: new Date(),
-          updated_at: new Date()
-        });
-      
-      // Record the redemption
+      // Record the redemption details
       await trx('redemptions').insert({
         token_id: tokenData.id,
         denomination_id: keyPair.denominationId,
         status: 'completed',
-        created_at: new Date()
+        created_at: now
       });
+      
+      // Update token stats
+      await trx('token_stats')
+        .where('denomination_id', keyPair.denominationId)
+        .increment('redeemed_count', 1)
+        .update('last_updated', now)
+        .catch(async () => {
+          // If no row exists yet, create it
+          await trx('token_stats').insert({
+            denomination_id: keyPair.denominationId,
+            minted_count: 0, // We don't know how many were minted before stats tracking
+            redeemed_count: 1,
+            last_updated: now
+          });
+        });
       
       // Commit the transaction
       await trx.commit();
@@ -468,20 +503,36 @@ async function remintToken(req, res) {
       });
     }
     
-    // Parse token - support both compact and raw JSON formats
+    logger.info('Reminting token, input format:', typeof token);
+    
+    // Parse token - support both compact (with/without prefix) and raw JSON formats
     let parsedToken;
     try {
-      if (token.startsWith('giftmint')) {
+      // Check if it's already a JSON string (for backward compatibility)
+      if (typeof token === 'string' && token.startsWith('{') && token.endsWith('}')) {
+        logger.info('Token appears to be JSON already, parsing directly');
+        parsedToken = JSON.parse(token);
+      }
+      // Check if the token is a compact format with any prefix
+      else if (typeof token === 'string' && 
+          (token.startsWith('giftmint') || 
+           token.startsWith('btcpins') || 
+           token.startsWith(config.token.prefix))) {
+        logger.info('Detected compact token format with prefix');
         // Compact token format
         parsedToken = decodeToken(token);
       } else {
-        // Legacy JSON format
-        parsedToken = JSON.parse(token);
+        logger.info('Attempting generic decode');
+        // Try generic approach
+        parsedToken = decodeToken(token);
       }
+      
+      logger.info('Successfully parsed token');
     } catch (e) {
+      logger.error('Error parsing token:', e.message);
       return res.status(400).json({
         success: false,
-        message: 'Invalid token format'
+        message: 'Invalid token format: ' + e.message
       });
     }
     
@@ -508,6 +559,21 @@ async function remintToken(req, res) {
     
     // Get key pair by ID
     const keyPair = await keyManager.getKeyPairById(key_id);
+    if (!keyPair) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid key ID'
+      });
+    }
+    
+    // Get denomination info
+    const denomination = await keyManager.getDenomination(keyPair.denominationId);
+    if (!denomination) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid denomination'
+      });
+    }
     
     // Recreate the token hash
     const tokenHash = require('crypto')
@@ -515,7 +581,7 @@ async function remintToken(req, res) {
       .update(Buffer.from(data, 'utf8'))
       .digest();
     
-    // Verify signature
+    // Verify signature cryptographically
     const isValid = blindSignature.verifySignature(
       tokenHash,
       Buffer.from(signature, 'base64'),
@@ -534,126 +600,91 @@ async function remintToken(req, res) {
     const trx = await db.transaction();
     
     try {
-      // Check if token has been redeemed
-      const storedToken = await trx('tokens')
+      // Check if token has been redeemed by checking redeemed_tokens table
+      const redeemedToken = await trx('redeemed_tokens')
         .where('id', tokenData.id)
         .first();
       
-      if (storedToken && storedToken.status === 'redeemed') {
+      if (redeemedToken) {
         await trx.rollback();
         return res.status(400).json({
           success: false,
-          message: 'Token has already been redeemed'
+          message: 'Token has already been redeemed',
+          redeemed_at: redeemedToken.redeemed_at
         });
       }
       
-      // Create a new token with the same amount
-      const activeKeyPair = await keyManager.getActiveKeyPair();
-      
+      // Create a new token with the same denomination
       const newTokenRequest = blindSignature.createTokenRequest(
-        new Decimal(tokenData.amount).toNumber(),
-        tokenData.currency,
-        activeKeyPair.publicKey,
-        tokenData.batchId || ''
+        keyPair.denominationId,
+        keyPair.publicKey
       );
       
-      // Store new token in database
-      await trx('tokens').insert({
-        id: newTokenRequest.id,
-        amount: new Decimal(tokenData.amount).toNumber(),
-        currency: tokenData.currency,
-        key_id: activeKeyPair.id,
-        blinded_token: newTokenRequest.blindedToken,
-        status: 'pending',
-        batch_id: tokenData.batchId || null,
-        created_at: new Date(),
-        updated_at: new Date(),
-        expires_at: new Date(Date.now() + config.crypto.tokenExpiry * 1000)
-      });
+      // Add a log to help debug
+      logger.info('Created new token request with the same denomination');
       
-      // Sign the blinded token
+      // Sign the new token immediately (privacy-preserving approach)
       const blindedTokenBuffer = Buffer.from(newTokenRequest.blindedToken, 'base64');
-      const newSignature = blindSignature.signBlindedMessage(blindedTokenBuffer, activeKeyPair.privateKey);
-      
-      // Update token status in database
-      await trx('tokens')
-        .where('id', newTokenRequest.id)
-        .update({
-          signed_token: newSignature.toString('base64'),
-          status: 'active',
-          updated_at: new Date()
-        });
+      const newSignature = blindSignature.signBlindedMessage(
+        blindedTokenBuffer, 
+        keyPair.privateKey
+      );
       
       // Process the signed token
-      // Ensure tokenRequest has hashAlgo property if the original didn't include it
-      if (!newTokenRequest.hashAlgo) {
-        newTokenRequest.hashAlgo = 'sha256'; // Default for backwards compatibility
-      }
-      
       const finishedNewToken = blindSignature.processSignedToken(
         newTokenRequest,
         newSignature.toString('base64'),
-        activeKeyPair.publicKey
+        keyPair.publicKey
       );
       
-      // Mark old token as redeemed
-      if (storedToken) {
-        await trx('tokens')
-          .where('id', tokenData.id)
-          .update({
-            status: 'redeemed',
-            redeemed_at: new Date(),
-            updated_at: new Date()
-          });
-      } else {
-        // If old token wasn't in the database, add it as redeemed
-        await trx('tokens').insert({
-          id: tokenData.id,
-          amount: new Decimal(tokenData.amount).toNumber(),
-          currency: tokenData.currency,
-          key_id: key_id,
-          blinded_token: '',
-          signed_token: signature,
-          status: 'redeemed',
-          batch_id: tokenData.batchId || null,
-          created_at: new Date(tokenData.createdAt),
-          updated_at: new Date(),
-          redeemed_at: new Date(),
-          expires_at: new Date(Date.now() + config.crypto.tokenExpiry * 1000)
-        });
-      }
+      // Create token object
+      const tokenObject = {
+        data: finishedNewToken.data,
+        signature: finishedNewToken.signature,
+        key_id: keyPair.id
+      };
       
-      // Record the remint as a redemption
-      await trx('redemptions').insert({
-        token_id: tokenData.id,
-        amount: new Decimal(tokenData.amount).toNumber(),
-        currency: tokenData.currency,
-        status: 'completed',
-        remaining_amount: 0,
-        change_token_id: newTokenRequest.id,
-        created_at: new Date()
+      // Mark old token as redeemed in redeemed_tokens table
+      await trx('redeemed_tokens').insert({
+        id: tokenData.id,
+        denomination_id: denomination.id,
+        key_id: key_id,
+        redeemed_at: trx.fn.now()
       });
+      
+      // Update stats
+      await trx('token_stats')
+        .where('denomination_id', denomination.id)
+        .increment('minted_count', 1)
+        .increment('redeemed_count', 1)
+        .update('last_updated', trx.fn.now())
+        .catch(async () => {
+          // If record doesn't exist, create it
+          await trx('token_stats').insert({
+            denomination_id: denomination.id,
+            minted_count: 1,
+            redeemed_count: 1,
+            last_updated: trx.fn.now()
+          });
+        });
+      
+      // Create the encoded token
+      const compactToken = encodeToken(tokenObject, custom_prefix);
       
       // Commit the transaction
       await trx.commit();
       
-      // Format new token
-      const newTokenObject = {
-        data: finishedNewToken.data,
-        signature: finishedNewToken.signature,
-        key_id: activeKeyPair.id
-      };
-      
-      // Create compact token format with custom prefix if provided
-      const compactToken = encodeToken(newTokenObject, custom_prefix);
-      
-      // Return new token
+      // Return the new token
       res.status(200).json({
         success: true,
         new_token: compactToken,
-        new_token_raw: JSON.stringify(newTokenObject), // Include raw format for backward compatibility
-        amount: tokenData.amount,
-        currency: tokenData.currency
+        new_token_raw: JSON.stringify(tokenObject),
+        denomination: {
+          id: denomination.id,
+          value: denomination.value,
+          currency: denomination.currency,
+          description: denomination.description
+        }
       });
     } catch (error) {
       await trx.rollback();
@@ -664,6 +695,29 @@ async function remintToken(req, res) {
     res.status(500).json({
       success: false,
       message: 'Failed to remint token',
+      error: error.message
+    });
+  }
+}
+
+/**
+ * Split a token (temporary implementation - will be updated)
+ * 
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
+async function splitToken(req, res) {
+  try {
+    // Return a 501 Not Implemented
+    res.status(501).json({
+      success: false,
+      message: 'Split token functionality is being updated for the privacy-preserving design'
+    });
+  } catch (error) {
+    logger.error({ error }, 'Failed to split token');
+    res.status(500).json({
+      success: false,
+      message: 'Failed to split token',
       error: error.message
     });
   }
@@ -814,34 +868,86 @@ async function getOutstandingValue(req, res) {
   try {
     const { batch_id, currency } = req.body;
     
-    // Get the total value of all active tokens
     const db = getDb();
-    let query = db('tokens')
-      .where('status', 'active');
     
-    // Filter by batch ID if provided
     if (batch_id) {
-      query = query.where('batch_id', batch_id);
+      // Get stats for a specific batch
+      const batchStats = await db('batch_stats')
+        .where('batch_id', batch_id)
+        .first();
+      
+      if (!batchStats) {
+        return res.status(404).json({
+          success: false,
+          message: 'Batch not found'
+        });
+      }
+      
+      return res.status(200).json({
+        success: true,
+        value: parseFloat(batchStats.total_value) - parseFloat(batchStats.redeemed_value),
+        total_value: parseFloat(batchStats.total_value),
+        redeemed_value: parseFloat(batchStats.redeemed_value),
+        batch_id: batchStats.batch_id,
+        currency: batchStats.currency
+      });
     }
     
-    // Filter by currency if provided
     if (currency) {
-      query = query.where('currency', currency);
+      // Calculate outstanding value for a specific currency
+      const denominationStats = await db('denominations')
+        .join('token_stats', 'denominations.id', 'token_stats.denomination_id')
+        .where('denominations.currency', currency)
+        .select(
+          'denominations.currency',
+          db.raw('SUM(denominations.value * token_stats.minted_count) as total_value'),
+          db.raw('SUM(denominations.value * token_stats.redeemed_count) as redeemed_value')
+        )
+        .groupBy('denominations.currency')
+        .first();
+      
+      if (!denominationStats) {
+        return res.status(200).json({
+          success: true,
+          value: 0,
+          total_value: 0,
+          redeemed_value: 0,
+          currency: currency
+        });
+      }
+      
+      return res.status(200).json({
+        success: true,
+        value: parseFloat(denominationStats.total_value) - parseFloat(denominationStats.redeemed_value),
+        total_value: parseFloat(denominationStats.total_value),
+        redeemed_value: parseFloat(denominationStats.redeemed_value),
+        currency: denominationStats.currency
+      });
     }
     
-    // Sum the amounts
-    const result = await query
-      .sum('amount as total')
+    // Calculate total outstanding value across all denominations
+    const allStats = await db('denominations')
+      .join('token_stats', 'denominations.id', 'token_stats.denomination_id')
+      .select(
+        db.raw('SUM(denominations.value * token_stats.minted_count) as total_value'),
+        db.raw('SUM(denominations.value * token_stats.redeemed_count) as redeemed_value')
+      )
       .first();
     
-    const total = result.total || 0;
+    if (!allStats) {
+      return res.status(200).json({
+        success: true,
+        value: 0,
+        total_value: 0,
+        redeemed_value: 0
+      });
+    }
     
-    // Return the total value
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      value: total,
-      batch_id: batch_id || null,
-      currency: currency || null
+      value: parseFloat(allStats.total_value) - parseFloat(allStats.redeemed_value),
+      total_value: parseFloat(allStats.total_value),
+      redeemed_value: parseFloat(allStats.redeemed_value)
     });
   } catch (error) {
     logger.error({ error }, 'Failed to get outstanding value');

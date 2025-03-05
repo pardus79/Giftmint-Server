@@ -132,26 +132,48 @@ async function createTables() {
     logger.info('Created mint_keys table');
   }
   
-  const hasTokenTable = await db.schema.hasTable('tokens');
-  if (!hasTokenTable) {
-    await db.schema.createTable('tokens', function(table) {
-      table.string('id').primary();
+  // Create redeemed_tokens table that only stores redeemed tokens (for double-spend prevention)
+  const hasRedeemedTokensTable = await db.schema.hasTable('redeemed_tokens');
+  if (!hasRedeemedTokensTable) {
+    await db.schema.createTable('redeemed_tokens', function(table) {
+      table.string('id').primary(); // Token ID
       table.string('denomination_id').notNullable(); // Link to which denomination (value) this token has
       table.string('key_id').notNullable(); // Which specific key signed this token
-      table.text('blinded_token').notNullable();
-      table.text('signed_token');
-      table.string('status').defaultTo('pending'); // pending, active, redeemed, expired
-      table.timestamp('created_at').defaultTo(db.fn.now());
-      table.timestamp('updated_at').defaultTo(db.fn.now());
-      table.timestamp('expires_at');
-      table.timestamp('redeemed_at');
-      table.index(['status']);
+      table.timestamp('redeemed_at').defaultTo(db.fn.now());
       table.index(['key_id']);
       table.index(['denomination_id']);
       table.foreign('key_id').references('mint_keys.id');
       table.foreign('denomination_id').references('denominations.id');
     });
-    logger.info('Created tokens table');
+    logger.info('Created redeemed_tokens table');
+  }
+  
+  // Create token_stats table for tracking aggregate stats without storing individual tokens
+  const hasStatsTable = await db.schema.hasTable('token_stats');
+  if (!hasStatsTable) {
+    await db.schema.createTable('token_stats', function(table) {
+      table.string('denomination_id').primary();
+      table.integer('minted_count').defaultTo(0);
+      table.integer('redeemed_count').defaultTo(0);
+      table.timestamp('last_updated').defaultTo(db.fn.now());
+      table.foreign('denomination_id').references('denominations.id');
+    });
+    logger.info('Created token_stats table');
+  }
+  
+  // Create batch stats table for tracking batch totals
+  const hasBatchStatsTable = await db.schema.hasTable('batch_stats');
+  if (!hasBatchStatsTable) {
+    await db.schema.createTable('batch_stats', function(table) {
+      table.string('batch_id').primary();
+      table.string('currency').notNullable();
+      table.decimal('total_value', 15, 8).defaultTo(0);
+      table.decimal('redeemed_value', 15, 8).defaultTo(0);
+      table.timestamp('created_at').defaultTo(db.fn.now());
+      table.timestamp('last_updated').defaultTo(db.fn.now());
+      table.index(['currency']);
+    });
+    logger.info('Created batch_stats table');
   }
   
   const hasRedemptionTable = await db.schema.hasTable('redemptions');
@@ -165,7 +187,6 @@ async function createTables() {
       table.timestamp('created_at').defaultTo(db.fn.now());
       table.index(['token_id']);
       table.index(['denomination_id']);
-      table.foreign('token_id').references('tokens.id');
       table.foreign('denomination_id').references('denominations.id');
     });
     logger.info('Created redemptions table');
@@ -181,7 +202,6 @@ async function createTables() {
       table.string('redeemed_denomination_id').notNullable(); // Smaller denomination that was actually redeemed
       table.timestamp('created_at').defaultTo(db.fn.now());
       table.index(['original_token_id']);
-      table.foreign('original_token_id').references('tokens.id');
       table.foreign('original_denomination_id').references('denominations.id');
       table.foreign('redeemed_denomination_id').references('denominations.id');
     });
@@ -200,10 +220,106 @@ async function createTables() {
       table.index(['split_id']);
       table.index(['token_id']);
       table.foreign('split_id').references('split_redemptions.id');
-      table.foreign('token_id').references('tokens.id');
       table.foreign('denomination_id').references('denominations.id');
     });
     logger.info('Created change_tokens table');
+  }
+  
+  // If the old tokens table exists, migrate data to redeemed_tokens and drop it
+  const hasTokenTable = await db.schema.hasTable('tokens');
+  if (hasTokenTable) {
+    try {
+      logger.info('Migrating redeemed tokens from old tokens table...');
+      
+      // Copy redeemed tokens to the new table
+      const redeemedTokens = await db('tokens').where('status', 'redeemed');
+      
+      if (redeemedTokens.length > 0) {
+        // Map old format to new format
+        const migratedTokens = redeemedTokens.map(token => ({
+          id: token.id,
+          denomination_id: token.denomination_id,
+          key_id: token.key_id,
+          redeemed_at: token.redeemed_at || db.fn.now()
+        }));
+        
+        // Insert into new table
+        await db('redeemed_tokens').insert(migratedTokens);
+        logger.info(`Migrated ${migratedTokens.length} redeemed tokens`);
+        
+        // Update token stats
+        for (const token of redeemedTokens) {
+          await db('token_stats')
+            .where('denomination_id', token.denomination_id)
+            .increment('redeemed_count', 1)
+            .catch(() => {
+              // Insert if not exists
+              return db('token_stats').insert({
+                denomination_id: token.denomination_id,
+                minted_count: 0,
+                redeemed_count: 1
+              });
+            });
+        }
+      } else {
+        logger.info('No redeemed tokens to migrate');
+      }
+      
+      // Count how many tokens were created for stats
+      const activeTokens = await db('tokens').where('status', 'active');
+      if (activeTokens.length > 0) {
+        // Group by denomination
+        const denominationCounts = {};
+        for (const token of activeTokens) {
+          if (!denominationCounts[token.denomination_id]) {
+            denominationCounts[token.denomination_id] = 0;
+          }
+          denominationCounts[token.denomination_id]++;
+        }
+        
+        // Update stats
+        for (const [denomId, count] of Object.entries(denominationCounts)) {
+          await db('token_stats')
+            .where('denomination_id', denomId)
+            .increment('minted_count', count)
+            .catch(() => {
+              // Insert if not exists
+              return db('token_stats').insert({
+                denomination_id: denomId,
+                minted_count: count,
+                redeemed_count: 0
+              });
+            });
+        }
+        
+        logger.info(`Migrated stats for ${activeTokens.length} active tokens`);
+      }
+      
+      // Create a backup table of the old data before dropping
+      await db.schema.createTable('tokens_backup', function(table) {
+        table.string('id').primary();
+        table.string('denomination_id').notNullable();
+        table.string('key_id').notNullable();
+        table.text('blinded_token').notNullable();
+        table.text('signed_token');
+        table.string('status').defaultTo('pending');
+        table.timestamp('created_at').defaultTo(db.fn.now());
+        table.timestamp('updated_at').defaultTo(db.fn.now());
+        table.timestamp('expires_at');
+        table.timestamp('redeemed_at');
+      });
+      
+      // Copy all data to backup
+      await db.raw('INSERT INTO tokens_backup SELECT * FROM tokens');
+      logger.info('Created backup of tokens table');
+      
+      // Drop the old table
+      await db.schema.dropTable('tokens');
+      logger.info('Dropped old tokens table');
+    } catch (error) {
+      logger.error(error, 'Failed to migrate tokens table');
+      // Don't throw - continue with other tables
+    }
   }
 }
 
