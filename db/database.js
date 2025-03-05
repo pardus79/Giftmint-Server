@@ -81,7 +81,15 @@ function getDbConfig() {
           password: config.database.password,
           database: config.database.database
         },
-        pool: { min: 0, max: 7 }
+        pool: { 
+          min: 2,
+          max: 20,
+          acquireTimeoutMillis: 60000,
+          createTimeoutMillis: 30000,
+          idleTimeoutMillis: 30000,
+          reapIntervalMillis: 1000,
+          createRetryIntervalMillis: 100
+        }
       };
     case 'postgres':
       return {
@@ -93,7 +101,15 @@ function getDbConfig() {
           password: config.database.password,
           database: config.database.database
         },
-        pool: { min: 0, max: 7 }
+        pool: { 
+          min: 2,
+          max: 20,
+          acquireTimeoutMillis: 60000,
+          createTimeoutMillis: 30000,
+          idleTimeoutMillis: 30000,
+          reapIntervalMillis: 1000,
+          createRetryIntervalMillis: 100
+        }
       };
     default:
       throw new Error(`Unsupported database type: ${config.database.type}`);
