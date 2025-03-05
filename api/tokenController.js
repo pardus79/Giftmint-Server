@@ -444,27 +444,57 @@ async function verifyToken(req, res) {
             ) : 'unknown'
         }, 'Unbundled token structure analysis');
         
-        // If we get tokens back, verify each one
-        if (unbundled && unbundled.t && Array.isArray(unbundled.t) && unbundled.t.length > 0) {
-          logger.debug(`Successfully unbundled CBOR data with ${unbundled.t.length} elements`);
+        // Check if we have tokens to verify and if we're dealing with raw structure
+        if (unbundled && unbundled.t && Array.isArray(unbundled.t)) {
+          // Check if this is a raw CBOR structure with nested proofs
+          const isRawStructure = unbundled.raw_structure === true;
+          
+          logger.debug({
+            elementsCount: unbundled.t.length,
+            isRawStructure: isRawStructure,
+            hasDecodedTokens: !!unbundled.decoded_tokens
+          }, 'Analyzing unbundled token structure');
           
           // Verify each token in the bundle
           const results = [];
           const totalValue = { amount: 0, currency: null };
           
-          // Get token count for debugging
-          const tokenCount = unbundled.t.reduce((count, token) => {
-            if (token && typeof token === 'string') {
-              // Direct token
-              return count + 1;
-            } else if (token && Array.isArray(token.p)) {
-              // TokenV4 format with nested proofs
-              return count + token.p.length;
-            }
-            return count;
-          }, 0);
+          // Count tokens and proofs for debugging
+          let totalProofsCount = 0;
           
-          logger.debug(`Found approximately ${tokenCount} tokens to verify`);
+          if (isRawStructure) {
+            // This is a raw CBOR structure with token groups
+            for (const group of unbundled.t) {
+              if (group && group.p && Array.isArray(group.p)) {
+                totalProofsCount += group.p.length;
+              }
+            }
+          } else {
+            // Use the old count method for backward compatibility
+            totalProofsCount = unbundled.t.reduce((count, token) => {
+              if (token && typeof token === 'string') {
+                // Direct token
+                return count + 1;
+              } else if (token && Array.isArray(token.p)) {
+                // TokenV4 format with nested proofs
+                return count + token.p.length;
+              }
+              return count;
+            }, 0);
+          }
+          
+          logger.debug(`Found approximately ${totalProofsCount} tokens to verify across ${unbundled.t.length} groups`);
+          
+          // Deep logging of the first token group for analysis
+          if (unbundled.t.length > 0) {
+            const firstGroup = unbundled.t[0];
+            logger.debug({ 
+              firstGroup: typeof firstGroup === 'string' ? 
+                'string token' : JSON.stringify(firstGroup).substring(0, 200),
+              hasProofs: firstGroup && firstGroup.p ? true : false,
+              proofsCount: firstGroup && firstGroup.p ? firstGroup.p.length : 0
+            }, 'First token group analysis');
+          }
           
           // Process all tokens, handling different structures
           for (const item of unbundled.t) {

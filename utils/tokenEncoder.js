@@ -689,10 +689,22 @@ function unbundleTokens(bundleString) {
             
             logger.debug(`Extracted ${recreatedTokens.length} tokens from CBOR bundle`);
             
-            // Return in a format compatible with other bundle types
+            // Instead of just returning the recreated tokens as an array,
+            // let's return the original CBOR structure WITH the recreated tokens
+            // This will preserve the group structure needed for proper verification
+            
+            logger.debug({ 
+              decodedTokens: recreatedTokens.length,
+              originalStructure: !!cborBundle.t,
+              returningRaw: true,
+            }, 'Returning raw CBOR structure for verification');
+            
+            // Return the raw CBOR bundle structure AND the decoded tokens
             return {
               v: 4, // CBOR format version
-              t: recreatedTokens,
+              t: cborBundle.t, // Return the raw structure with groups
+              raw_structure: true, // Mark that we're returning raw structure
+              decoded_tokens: recreatedTokens, // Also include decoded tokens as a backup
               c: recreatedTokens.length,
               format: 'cbor'
             };
