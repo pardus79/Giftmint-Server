@@ -11,13 +11,15 @@ const tokenController = require('./tokenController');
 router.post('/denomination/list', asyncHandler(tokenController.listDenominations));
 router.get('/token/denominations', asyncHandler(tokenController.listDenominations));
 
-// Token routes
-router.post('/token/create', asyncHandler(tokenController.createToken));
-router.post('/token/verify', asyncHandler(tokenController.verifyToken));
-router.post('/token/redeem', asyncHandler(tokenController.redeemToken));
-router.post('/token/remint', asyncHandler(tokenController.remintToken));
-router.post('/token/split', asyncHandler(tokenController.splitToken));
-router.post('/token/bulk-create', asyncHandler(tokenController.bulkCreateTokens));
+// Token routes (EC-based, compact tokens)
+router.post('/token/create', asyncHandler(tokenController.createECToken));
+router.post('/token/verify', asyncHandler(tokenController.verifyECToken));
+router.post('/token/redeem', asyncHandler(tokenController.redeemECToken));
+
+// Also available under /ec endpoint for compatibility with existing documentation
+router.post('/ec/token/create', asyncHandler(tokenController.createECToken));
+router.post('/ec/token/verify', asyncHandler(tokenController.verifyECToken));
+router.post('/ec/token/redeem', asyncHandler(tokenController.redeemECToken));
 
 // Stats routes
 router.post('/stats/outstanding', asyncHandler(tokenController.getOutstandingValue));

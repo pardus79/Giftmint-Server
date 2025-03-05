@@ -1,5 +1,6 @@
 /**
  * Token Controller for Giftmint mint
+ * EC-based implementation for compact gift certificates
  */
 
 const { v4: uuidv4 } = require('uuid');
@@ -8,8 +9,8 @@ const pino = require('pino');
 
 const config = require('../config/config');
 const { getDb } = require('../db/database');
-const keyManager = require('../crypto/keyManager');
-const blindSignature = require('../crypto/blindSignature');
+const keyManager = require('../crypto/ecKeyManager');
+const blindSignature = require('../crypto/ecBlindSignature'); // Using EC implementation only
 const { encodeToken, decodeToken } = require('../utils/tokenEncoder');
 
 // Initialize logger directly without importing from server to avoid circular dependencies
@@ -139,31 +140,22 @@ async function createToken(req, res) {
           logger.info(`Creating token for denomination: ${denom.id} (${denom.value} ${denom.currency})`);
           
           // Create token request with proper denomination ID
-          const tokenRequest = blindSignature.createTokenRequest(
-            denom.id, // Make sure to use the correct denomination ID
-            tokenKeyPair.publicKey
-          );
-          
-          // Mark token requests created for arbitrary amounts
-          tokenRequest.bypassVerificationForArbitraryAmount = true;
+          const tokenRequest = blindSignature.createTokenRequest(denom.id);
           
           logger.debug(`Created token request with ID: ${tokenRequest.id}`);
           
-          // Sign the blinded token
-          const blindedTokenBuffer = Buffer.from(tokenRequest.blindedToken, 'base64');
-          const signature = blindSignature.signBlindedMessage(blindedTokenBuffer, tokenKeyPair.privateKey);
+          // Sign the blinded message
+          const blindedMessage = Buffer.from(tokenRequest.blindedMessage, 'hex');
+          const privateKey = Buffer.from(tokenKeyPair.privateKey, 'hex');
+          const signature = blindSignature.signBlindedMessage(blindedMessage, privateKey);
           
           logger.debug(`Signed token request with ID: ${tokenRequest.id}`);
           
-          // Process the signed token
-          if (!tokenRequest.hashAlgo) {
-            tokenRequest.hashAlgo = 'sha256';
-          }
-          
           try {
+            // Process the signed token
             const finishedToken = blindSignature.processSignedToken(
               tokenRequest,
-              signature.toString('base64'),
+              signature.toString('hex'),
               tokenKeyPair.publicKey
             );
             
@@ -171,7 +163,7 @@ async function createToken(req, res) {
             
             // Create token object
             const tokenObject = {
-              data: finishedToken.data,
+              data: JSON.stringify({ id: finishedToken.secret }),
               signature: finishedToken.signature,
               key_id: tokenKeyPair.id
             };
@@ -284,15 +276,13 @@ async function createToken(req, res) {
       denomination = await keyManager.getDenomination(keyPair.denominationId);
     }
     
-    // Create token request (properly blind, with no metadata)
-    const tokenRequest = blindSignature.createTokenRequest(
-      keyPair.denominationId,
-      keyPair.publicKey
-    );
+    // Create token request
+    const tokenRequest = blindSignature.createTokenRequest(keyPair.denominationId);
     
-    // Sign the blinded token - we no longer store tokens until they're redeemed
-    const blindedTokenBuffer = Buffer.from(tokenRequest.blindedToken, 'base64');
-    const signature = blindSignature.signBlindedMessage(blindedTokenBuffer, keyPair.privateKey);
+    // Sign the blinded message - we don't store tokens until they're redeemed
+    const blindedMessage = Buffer.from(tokenRequest.blindedMessage, 'hex');
+    const privateKey = Buffer.from(keyPair.privateKey, 'hex');
+    const signature = blindSignature.signBlindedMessage(blindedMessage, privateKey);
     
     // Update aggregate token stats for this denomination
     try {
@@ -348,19 +338,15 @@ async function createToken(req, res) {
     }
     
     // Process the signed token
-    if (!tokenRequest.hashAlgo) {
-      tokenRequest.hashAlgo = 'sha256'; // Default for backwards compatibility
-    }
-    
     const finishedToken = blindSignature.processSignedToken(
       tokenRequest,
-      signature.toString('base64'),
+      signature.toString('hex'),
       keyPair.publicKey
     );
     
     // Create token object (in true Chaumian fashion, just the blind signature with no metadata)
     const tokenObject = {
-      data: finishedToken.data,
+      data: JSON.stringify({ id: finishedToken.secret }),
       signature: finishedToken.signature,
       key_id: keyPair.id
     };
@@ -877,17 +863,19 @@ async function verifyToken(req, res) {
     // Get denomination info
     const denomination = await keyManager.getDenomination(keyPair.denominationId);
     
-    // Recreate the token hash
-    const tokenHash = require('crypto')
-      .createHash('sha256')
-      .update(Buffer.from(data, 'utf8'))
-      .digest();
+    // Parse token data to get the secret
+    const tokenData = JSON.parse(data);
+    const secret = tokenData.id;
+    
+    // Verify signature using EC implementation
+    const signatureBuffer = Buffer.from(signature, 'hex');
+    const privateKeyBuffer = Buffer.from(keyPair.privateKey, 'hex');
     
     // Verify signature
     const isValid = blindSignature.verifySignature(
-      tokenHash,
-      Buffer.from(signature, 'base64'),
-      keyPair.publicKey
+      secret,
+      signatureBuffer,
+      privateKeyBuffer
     );
     
     if (!isValid) {
@@ -997,17 +985,19 @@ async function redeemToken(req, res) {
     // Get denomination info
     const denomination = await keyManager.getDenomination(keyPair.denominationId);
     
-    // Recreate the token hash
-    const tokenHash = require('crypto')
-      .createHash('sha256')
-      .update(Buffer.from(data, 'utf8'))
-      .digest();
+    // Parse token data to get the secret
+    const tokenData = JSON.parse(data);
+    const secret = tokenData.id;
+    
+    // Verify signature using EC implementation
+    const signatureBuffer = Buffer.from(signature, 'hex');
+    const privateKeyBuffer = Buffer.from(keyPair.privateKey, 'hex');
     
     // Verify signature
     const isValid = blindSignature.verifySignature(
-      tokenHash,
-      Buffer.from(signature, 'base64'),
-      keyPair.publicKey
+      secret,
+      signatureBuffer,
+      privateKeyBuffer
     );
     
     if (!isValid) {
@@ -1187,17 +1177,19 @@ async function remintToken(req, res) {
       });
     }
     
-    // Recreate the token hash
-    const tokenHash = require('crypto')
-      .createHash('sha256')
-      .update(Buffer.from(data, 'utf8'))
-      .digest();
+    // Parse token data to get the secret
+    const tokenData = JSON.parse(data);
+    const secret = tokenData.id;
     
-    // Verify signature cryptographically
+    // Verify signature using EC implementation
+    const signatureBuffer = Buffer.from(signature, 'hex');
+    const privateKeyBuffer = Buffer.from(keyPair.privateKey, 'hex');
+    
+    // Verify signature
     const isValid = blindSignature.verifySignature(
-      tokenHash,
-      Buffer.from(signature, 'base64'),
-      keyPair.publicKey
+      secret,
+      signatureBuffer,
+      privateKeyBuffer
     );
     
     if (!isValid) {
@@ -1227,31 +1219,29 @@ async function remintToken(req, res) {
       }
       
       // Create a new token with the same denomination
-      const newTokenRequest = blindSignature.createTokenRequest(
-        keyPair.denominationId,
-        keyPair.publicKey
-      );
+      const newTokenRequest = blindSignature.createTokenRequest(keyPair.denominationId);
       
       // Add a log to help debug
       logger.info('Created new token request with the same denomination');
       
       // Sign the new token immediately (privacy-preserving approach)
-      const blindedTokenBuffer = Buffer.from(newTokenRequest.blindedToken, 'base64');
+      const blindedMessage = Buffer.from(newTokenRequest.blindedMessage, 'hex');
+      const privateKey = Buffer.from(keyPair.privateKey, 'hex');
       const newSignature = blindSignature.signBlindedMessage(
-        blindedTokenBuffer, 
-        keyPair.privateKey
+        blindedMessage, 
+        privateKey
       );
       
       // Process the signed token
       const finishedNewToken = blindSignature.processSignedToken(
         newTokenRequest,
-        newSignature.toString('base64'),
+        newSignature.toString('hex'),
         keyPair.publicKey
       );
       
       // Create token object
       const tokenObject = {
-        data: finishedNewToken.data,
+        data: JSON.stringify({ id: finishedNewToken.secret }),
         signature: finishedNewToken.signature,
         key_id: keyPair.id
       };
@@ -1371,13 +1361,10 @@ async function bulkCreateTokens(req, res) {
     
     try {
       for (let i = 0; i < quantity; i++) {
-        // Create token request
-        const tokenRequest = blindSignature.createTokenRequest(
-          parseFloat(amount),
-          currency,
-          keyPair.publicKey,
-          batchId
-        );
+        // Create token request (with proper denomination ID or keyset ID)
+        // For EC version, we just need the keyset ID
+        const denominationId = keyPair.denominationId || keyPair.keysetId;
+        const tokenRequest = blindSignature.createTokenRequest(denominationId);
         
         // Store token in database
         await trx('tokens').insert({
@@ -1385,7 +1372,7 @@ async function bulkCreateTokens(req, res) {
           amount: new Decimal(amount).toNumber(),
           currency: currency,
           key_id: keyPair.id,
-          blinded_token: tokenRequest.blindedToken,
+          blinded_token: tokenRequest.blindedMessage, // Using EC blinded message (hex)
           status: 'pending',
           batch_id: batchId,
           created_at: new Date(),
@@ -1393,34 +1380,30 @@ async function bulkCreateTokens(req, res) {
           expires_at: new Date(Date.now() + config.crypto.tokenExpiry * 1000)
         });
         
-        // Sign the blinded token
-        const blindedTokenBuffer = Buffer.from(tokenRequest.blindedToken, 'base64');
-        const signature = blindSignature.signBlindedMessage(blindedTokenBuffer, keyPair.privateKey);
+        // Sign the blinded message
+        const blindedMessage = Buffer.from(tokenRequest.blindedMessage, 'hex');
+        const privateKey = Buffer.from(keyPair.privateKey, 'hex');
+        const signature = blindSignature.signBlindedMessage(blindedMessage, privateKey);
         
         // Update token status in database
         await trx('tokens')
           .where('id', tokenRequest.id)
           .update({
-            signed_token: signature.toString('base64'),
+            signed_token: signature.toString('hex'),
             status: 'active',
             updated_at: new Date()
           });
         
         // Process the signed token
-        // Ensure tokenRequest has hashAlgo property if the original didn't include it
-        if (!tokenRequest.hashAlgo) {
-          tokenRequest.hashAlgo = 'sha256'; // Default for backwards compatibility
-        }
-        
         const finishedToken = blindSignature.processSignedToken(
           tokenRequest,
-          signature.toString('base64'),
+          signature.toString('hex'),
           keyPair.publicKey
         );
         
         // Format token object
         const tokenObject = {
-          data: finishedToken.data,
+          data: JSON.stringify({ id: finishedToken.secret }),
           signature: finishedToken.signature,
           key_id: keyPair.id
         };
@@ -1925,15 +1908,1036 @@ async function getOutstandingByDenomination(req, res) {
   }
 }
 
+/**
+ * Create an EC token using the elliptic curve blind signature scheme
+ * 
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
+async function createECToken(req, res) {
+  try {
+    const { keyset_id, total_amount, custom_prefix, batch_id, currency } = req.body;
+    const db = getDb();
+    
+    // Initialize EC key manager if not already initialized
+    await ecKeyManager.init();
+    
+    // Handle arbitrary amount using combination of keysets for powers of 2
+    if (total_amount) {
+      logger.info(`Creating EC token with total_amount: ${total_amount}`);
+      
+      // Get all active keysets
+      const availableKeysets = await ecKeyManager.getAllActiveKeysets();
+      
+      if (availableKeysets.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'No active EC keysets available'
+        });
+      }
+      
+      // Sort keysets by value in descending order
+      const sortedKeysets = [...availableKeysets].sort((a, b) => b.value - a.value);
+      logger.info(`Available EC keysets: ${sortedKeysets.map(k => k.value).join(', ')}`);
+      
+      // Calculate which keysets to use (binary representation)
+      const selectedKeysets = [];
+      let remainingAmount = parseInt(total_amount, 10);
+      
+      // Use binary approach (powers of 2 make this simple)
+      for (const keyset of sortedKeysets) {
+        while (remainingAmount >= keyset.value) {
+          selectedKeysets.push(keyset);
+          remainingAmount -= keyset.value;
+        }
+      }
+      
+      if (remainingAmount > 0) {
+        return res.status(400).json({
+          success: false,
+          message: `Cannot make exact change for ${total_amount}`
+        });
+      }
+      
+      logger.info(`Using EC keysets: ${selectedKeysets.map(k => k.value).join(', ')}`);
+      
+      // Create multiple tokens
+      const createdTokens = [];
+      const keysetInfo = [];
+      
+      // Get key pairs for all keysets upfront
+      const keyPairsMap = {};
+      for (const keyset of selectedKeysets) {
+        if (!keyPairsMap[keyset.id]) {
+          try {
+            keyPairsMap[keyset.id] = await ecKeyManager.getKeyPairForKeyset(keyset.id);
+            logger.info(`Loaded EC keypair for keyset: ${keyset.id} (${keyset.value} ${keyset.currency})`);
+          } catch (err) {
+            logger.error({error: err}, `Failed to load EC keypair for keyset: ${keyset.id}`);
+            throw new Error(`Failed to load EC keypair for keyset: ${keyset.id}`);
+          }
+        }
+      }
+      
+      // Use a transaction with a timeout
+      const trx = await db.transaction();
+      
+      try {
+        for (const keyset of selectedKeysets) {
+          const tokenKeyPair = keyPairsMap[keyset.id];
+          
+          if (!tokenKeyPair) {
+            logger.error(`Missing EC keypair for keyset: ${keyset.id}`);
+            throw new Error(`Missing EC keypair for keyset: ${keyset.id}`);
+          }
+          
+          logger.info(`Creating EC token for keyset: ${keyset.id} (${keyset.value} ${keyset.currency})`);
+          
+          // Create token request with proper keyset ID
+          const tokenRequest = ecBlindSignature.createTokenRequest(keyset.id);
+          
+          logger.debug(`Created EC token request with ID: ${tokenRequest.id}`);
+          
+          // Get the private key as a Buffer
+          const privateKey = Buffer.from(tokenKeyPair.privateKey, 'hex');
+          
+          // Sign the blinded message
+          const blindedMessage = Buffer.from(tokenRequest.blindedMessage, 'hex');
+          const signature = ecBlindSignature.signBlindedMessage(blindedMessage, privateKey);
+          
+          logger.debug(`Signed EC token request with ID: ${tokenRequest.id}`);
+          
+          try {
+            // Process the signed token
+            const finishedToken = ecBlindSignature.processSignedToken(
+              tokenRequest,
+              signature.toString('hex'),
+              tokenKeyPair.publicKey
+            );
+            
+            logger.debug(`Processed signed EC token with ID: ${tokenRequest.id}`);
+            
+            // Create token object
+            const tokenObject = {
+              data: JSON.stringify({ id: finishedToken.secret }),
+              signature: finishedToken.signature,
+              key_id: tokenKeyPair.id
+            };
+            
+            // Create token format
+            const compactToken = encodeToken(tokenObject, custom_prefix);
+            
+            createdTokens.push(compactToken);
+            keysetInfo.push({
+              id: keyset.id,
+              value: keyset.value,
+              currency: keyset.currency,
+              description: keyset.description
+            });
+            
+            // Add to ec_token_stats if the table exists
+            try {
+              // Try to increment existing stats
+              const updated = await trx('ec_token_stats')
+                .where('keyset_id', keyset.id)
+                .increment('minted_count', 1)
+                .update('last_updated', trx.fn.now());
+              
+              // If no row was updated, create new stats entry
+              if (!updated) {
+                await trx('ec_token_stats').insert({
+                  keyset_id: keyset.id,
+                  minted_count: 1,
+                  redeemed_count: 0,
+                  last_updated: trx.fn.now()
+                });
+              }
+            } catch (statsError) {
+              // Check if the table doesn't exist
+              if (statsError.message.includes('no such table')) {
+                // Create ec_token_stats table
+                await trx.schema.createTable('ec_token_stats', table => {
+                  table.string('keyset_id').primary();
+                  table.integer('minted_count').defaultTo(0);
+                  table.integer('redeemed_count').defaultTo(0);
+                  table.timestamp('last_updated').defaultTo(trx.fn.now());
+                  
+                  table.foreign('keyset_id').references('id').inTable('ec_keysets');
+                });
+                
+                // Insert stats
+                await trx('ec_token_stats').insert({
+                  keyset_id: keyset.id,
+                  minted_count: 1,
+                  redeemed_count: 0,
+                  last_updated: trx.fn.now()
+                });
+              } else {
+                // Log but continue - stats are secondary to token creation
+                logger.warn({ error: statsError }, 'Failed to update EC token stats');
+              }
+            }
+            
+          } catch (tokenError) {
+            logger.error({error: tokenError}, `Failed to process EC token for keyset: ${keyset.id}`);
+            throw tokenError;
+          }
+        }
+        
+        // Update batch stats if a batch_id was provided
+        if (batch_id) {
+          // Check if the batch exists
+          const batch = await trx('batch_stats')
+            .where('batch_id', batch_id)
+            .first();
+          
+          if (batch) {
+            await trx('batch_stats')
+              .where('batch_id', batch_id)
+              .increment('total_value', parseInt(total_amount, 10))
+              .update('last_updated', trx.fn.now());
+          } else {
+            await trx('batch_stats').insert({
+              batch_id,
+              currency: currency || keysetInfo[0].currency,
+              total_value: parseInt(total_amount, 10),
+              redeemed_value: 0,
+              created_at: trx.fn.now(),
+              last_updated: trx.fn.now()
+            });
+          }
+        }
+        
+        await trx.commit();
+        
+        // Create a bundled token for easier handling
+        const { bundleTokens } = require('../utils/tokenEncoder');
+        const bundledToken = await bundleTokens(createdTokens, custom_prefix);
+        
+        // Return both individual tokens and the bundled version
+        return res.status(200).json({
+          success: true,
+          tokens: createdTokens,
+          bundle: bundledToken,
+          keyset_info: keysetInfo,
+          total_amount: parseInt(total_amount, 10),
+          token_count: createdTokens.length,
+          token_type: 'ec' // Indicate this is an EC token
+        });
+      } catch (error) {
+        await trx.rollback();
+        logger.error({ error }, 'Failed to create EC tokens with total_amount');
+        throw error;
+      }
+    }
+    
+    // Handle single keyset token
+    let keyPair;
+    let keyset;
+    
+    // Get key pair based on keyset_id or use active keyset
+    if (keyset_id) {
+      keyPair = await ecKeyManager.getKeyPairForKeyset(keyset_id);
+      keyset = await ecKeyManager.getKeyset(keyset_id);
+    } else {
+      // Get default (active) keyset key pair
+      keyPair = await ecKeyManager.getActiveKeyPair();
+      keyset = await ecKeyManager.getKeyset(keyPair.keysetId);
+    }
+    
+    // Create token request
+    const tokenRequest = ecBlindSignature.createTokenRequest(keyPair.keysetId);
+    
+    // Sign the blinded message
+    const blindedMessage = Buffer.from(tokenRequest.blindedMessage, 'hex');
+    const privateKey = Buffer.from(keyPair.privateKey, 'hex');
+    const signature = ecBlindSignature.signBlindedMessage(blindedMessage, privateKey);
+    
+    // Update token stats
+    try {
+      const db = getDb();
+      
+      // Check if ec_token_stats table exists
+      const hasTable = await db.schema.hasTable('ec_token_stats');
+      
+      if (!hasTable) {
+        // Create ec_token_stats table
+        await db.schema.createTable('ec_token_stats', table => {
+          table.string('keyset_id').primary();
+          table.integer('minted_count').defaultTo(0);
+          table.integer('redeemed_count').defaultTo(0);
+          table.timestamp('last_updated').defaultTo(db.fn.now());
+          
+          table.foreign('keyset_id').references('id').inTable('ec_keysets');
+        });
+      }
+      
+      // Try to increment existing stats
+      const updated = await db('ec_token_stats')
+        .where('keyset_id', keyPair.keysetId)
+        .increment('minted_count', 1)
+        .update('last_updated', db.fn.now());
+      
+      // If no row was updated, create new stats entry
+      if (!updated) {
+        await db('ec_token_stats').insert({
+          keyset_id: keyPair.keysetId,
+          minted_count: 1,
+          redeemed_count: 0,
+          last_updated: db.fn.now()
+        });
+      }
+    } catch (statsError) {
+      // Log but continue - stats are secondary to token creation
+      logger.warn({ error: statsError }, 'Failed to update EC token stats');
+    }
+    
+    // Update batch stats if a batch_id was provided
+    if (batch_id) {
+      try {
+        // Check if the batch exists
+        const batch = await db('batch_stats')
+          .where('batch_id', batch_id)
+          .first();
+        
+        if (batch) {
+          // Update existing batch
+          await db('batch_stats')
+            .where('batch_id', batch_id)
+            .increment('total_value', keyset.value)
+            .update('last_updated', db.fn.now());
+        } else {
+          // Create new batch stats
+          await db('batch_stats').insert({
+            batch_id,
+            currency: keyset.currency,
+            total_value: keyset.value,
+            redeemed_value: 0,
+            created_at: db.fn.now(),
+            last_updated: db.fn.now()
+          });
+        }
+      } catch (batchError) {
+        // Log but continue - batch stats are secondary
+        logger.warn({ error: batchError }, 'Failed to update batch stats');
+      }
+    }
+    
+    // Process the signed token
+    const finishedToken = ecBlindSignature.processSignedToken(
+      tokenRequest,
+      signature.toString('hex'),
+      keyPair.publicKey
+    );
+    
+    // Create token object
+    const tokenObject = {
+      data: JSON.stringify({ id: finishedToken.secret }),
+      signature: finishedToken.signature,
+      key_id: keyPair.id
+    };
+    
+    // Create both compact and raw token formats
+    const compactToken = encodeToken(tokenObject, custom_prefix);
+    
+    res.status(200).json({
+      success: true,
+      token: compactToken,
+      token_raw: JSON.stringify(tokenObject),
+      token_type: 'ec', // Indicate this is an EC token
+      keyset: {
+        id: keyset.id,
+        value: keyset.value,
+        currency: keyset.currency,
+        description: keyset.description
+      }
+    });
+  } catch (error) {
+    logger.error({ error }, 'Failed to create EC token');
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create EC token',
+      error: error.message
+    });
+  }
+}
+
+/**
+ * Verify an EC token
+ * 
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
+async function verifyECToken(req, res) {
+  try {
+    const { token } = req.body;
+    
+    // Validate input
+    if (!token) {
+      return res.status(400).json({
+        success: false,
+        message: 'Token is required'
+      });
+    }
+    
+    logger.debug({ tokenPrefix: token.substring(0, 20) + '...' }, 'Received EC token for verification');
+    
+    // Check if this is a bundle - handle it similarly to RSA tokens but using EC verification
+    if (token.includes('B') && (token.startsWith('btcpins') || token.startsWith('giftmint'))) {
+      logger.info('Detected bundle format for EC tokens, attempting to unbundle and verify');
+      
+      try {
+        const { bundleTokens, unbundleTokens } = require('../utils/tokenEncoder');
+        
+        // Enable extra debug info for troubleshooting
+        logger.level = 'debug';
+        
+        // Try to unbundle the token
+        const unbundled = unbundleTokens(token);
+        
+        if (unbundled && unbundled.t && Array.isArray(unbundled.t)) {
+          // Check if we have decoded tokens to use directly
+          const hasDecodedTokens = !!unbundled.decoded_tokens && Array.isArray(unbundled.decoded_tokens) && unbundled.decoded_tokens.length > 0;
+          
+          // Verify each token in the bundle
+          const results = [];
+          const totalValue = { amount: 0, currency: null };
+          
+          if (hasDecodedTokens) {
+            logger.debug(`Processing ${unbundled.decoded_tokens.length} directly decoded tokens`);
+            
+            // Process each decoded token directly
+            for (const token of unbundled.decoded_tokens) {
+              try {
+                logger.debug(`Verifying decoded EC token: ${token.substring(0, 20)}...`);
+                await verifyAndAddSingleECToken(token, results, totalValue);
+              } catch (decodedTokenError) {
+                logger.warn({ error: decodedTokenError }, 'Error processing decoded EC token');
+                // Continue to next token
+              }
+            }
+          } else {
+            // Process all tokens from the raw structure
+            logger.debug('No directly decoded tokens available, using raw CBOR structure for EC tokens');
+            
+            for (const item of unbundled.t) {
+              try {
+                // Check if this is a direct token string
+                if (typeof item === 'string') {
+                  logger.debug('Processing direct EC token string');
+                  await verifyAndAddSingleECToken(item, results, totalValue);
+                } 
+                // Check if this is a wrapped token with multiple proofs
+                else if (item && Array.isArray(item.p)) {
+                  logger.debug(`Processing EC token group with ${item.p.length} proofs`);
+                  
+                  // Process each proof in this group
+                  for (const proof of item.p) {
+                    try {
+                      // Determine if we have needed data to make this into a token
+                      if (!proof || !proof.s) {
+                        logger.warn('EC proof missing required data, skipping');
+                        continue;
+                      }
+                      
+                      logger.debug(`Verifying EC proof for secret: ${proof.s.substring(0, 8)}...`);
+                      
+                      // Get key ID from parent or proof
+                      const keyId = (item.i && Buffer.isBuffer(item.i)) ? 
+                        item.i.toString() : 
+                        (typeof item.i === 'string' ? item.i : 'unknown-key-id');
+                      
+                      // Get signature from proof
+                      let signature;
+                      if (Buffer.isBuffer(proof.c)) {
+                        signature = proof.c.toString('hex');
+                      } else if (typeof proof.c === 'string') {
+                        signature = proof.c;
+                      } else {
+                        logger.warn({
+                          proofType: typeof proof.c,
+                          secretId: proof.s.substring(0, 8)
+                        }, 'Unexpected signature format in EC proof');
+                        continue;
+                      }
+                      
+                      // Create token data
+                      const data = JSON.stringify({ id: proof.s });
+                      
+                      // Verify this token using EC verification
+                      await verifyAndAddECTokenComponents(data, signature, keyId, results, totalValue);
+                    } catch (proofError) {
+                      logger.warn({ error: proofError }, 'Error processing EC proof in token group');
+                    }
+                  }
+                } 
+                // Otherwise, try to parse as token
+                else {
+                  logger.debug('Attempting to parse and verify as individual EC token');
+                  await verifyAndAddSingleECToken(item, results, totalValue);
+                }
+              } catch (itemError) {
+                logger.error({ error: itemError }, 'Error processing EC bundle item');
+                // Continue to next token
+              }
+            }
+          }
+          
+          // Return all valid tokens
+          return res.status(200).json({
+            success: true,
+            bundle_verified: true,
+            valid_tokens: results,
+            token_count: results.length,
+            total_value: totalValue.amount,
+            currency: totalValue.currency || 'SATS',
+            token_type: 'ec'
+          });
+        } else {
+          logger.warn('No valid EC tokens found in bundle');
+          return res.status(400).json({
+            success: false,
+            message: 'No valid EC tokens found in bundle'
+          });
+        }
+      } catch (unbundleError) {
+        logger.error({ error: unbundleError }, 'Failed to unbundle EC token');
+        return res.status(400).json({
+          success: false,
+          message: 'Failed to unbundle EC token: ' + unbundleError.message
+        });
+      }
+    }
+    
+    // Handle single token verification for non-bundle cases
+    let parsedToken;
+    try {
+      // Check if the token is a compact format with any prefix
+      if (typeof token === 'string' && 
+          (token.startsWith('giftmint') || 
+            token.startsWith('btcpins') || 
+            token.startsWith(config.token.prefix))) {
+        logger.debug('Detected compact EC token format with prefix');
+        // Compact token format
+        parsedToken = decodeToken(token);
+      } else if (typeof token === 'string' && token.startsWith('{')) {
+        logger.debug('Detected JSON format EC token');
+        // Legacy JSON format
+        parsedToken = JSON.parse(token);
+      } else {
+        logger.debug('Attempting to decode EC token with generic approach');
+        // Try generic approach
+        parsedToken = decodeToken(token);
+      }
+      
+      logger.debug('Successfully parsed EC token');
+    } catch (e) {
+      logger.error({ error: e }, 'Error parsing EC token');
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid EC token format: ' + e.message
+      });
+    }
+    
+    // Extract token components
+    const { data, signature, key_id } = parsedToken;
+    
+    if (!data || !signature || !key_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid EC token structure'
+      });
+    }
+    
+    // Parse token data
+    let tokenData;
+    try {
+      tokenData = JSON.parse(data);
+    } catch (e) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid EC token data'
+      });
+    }
+    
+    // Get key pair by ID
+    const keyPair = await ecKeyManager.getKeyPairById(key_id);
+    
+    // Get keyset info
+    const keyset = await ecKeyManager.getKeyset(keyPair.keysetId);
+    
+    // Verify signature
+    // Convert the secret back to the format needed by the EC verification
+    const secret = tokenData.id;
+    
+    // The signature is stored as a hex string in our DB but needs to be a Buffer for verification
+    const signatureBuffer = Buffer.from(signature, 'hex');
+    
+    // The private key is stored as a hex string but needs to be a Buffer for verification
+    const privateKeyBuffer = Buffer.from(keyPair.privateKey, 'hex');
+    
+    const isValid = ecBlindSignature.verifySignature(
+      secret,
+      signatureBuffer,
+      privateKeyBuffer
+    );
+    
+    if (!isValid) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid EC token signature'
+      });
+    }
+    
+    // Check if token has been redeemed
+    const db = getDb();
+    
+    // Make sure ec_redeemed_tokens table exists
+    let hasTable = await db.schema.hasTable('ec_redeemed_tokens');
+    
+    if (!hasTable) {
+      await db.schema.createTable('ec_redeemed_tokens', table => {
+        table.string('id').primary();
+        table.string('keyset_id').notNullable();
+        table.string('key_id').notNullable();
+        table.timestamp('redeemed_at').defaultTo(db.fn.now());
+        
+        table.foreign('keyset_id').references('id').inTable('ec_keysets');
+        table.foreign('key_id').references('id').inTable('ec_keys');
+      });
+    }
+    
+    const redeemedToken = await db('ec_redeemed_tokens')
+      .where('id', tokenData.id)
+      .first();
+    
+    // Token is already redeemed if it exists in the ec_redeemed_tokens table
+    if (redeemedToken) {
+      return res.status(400).json({
+        success: false,
+        message: 'EC Token has already been redeemed',
+        redeemed_at: redeemedToken.redeemed_at
+      });
+    }
+    
+    // Return token verification with keyset details
+    res.status(200).json({
+      success: true,
+      valid: true,
+      token_id: tokenData.id,
+      token_type: 'ec',
+      keyset: {
+        id: keyset.id,
+        value: keyset.value,
+        currency: keyset.currency,
+        description: keyset.description
+      }
+    });
+  } catch (error) {
+    logger.error({ error }, 'Failed to verify EC token');
+    res.status(500).json({
+      success: false,
+      message: 'Failed to verify EC token',
+      error: error.message
+    });
+  }
+}
+
+// Helper function for verifying single EC tokens from bundles
+async function verifyAndAddSingleECToken(tokenString, results, totalValue) {
+  try {
+    logger.debug({ 
+      tokenPrefix: tokenString.substring(0, 20),
+      tokenLength: tokenString.length
+    }, 'Attempting to decode single EC token for verification');
+    
+    // Parse individual token
+    const parsed = decodeToken(tokenString);
+    
+    // Extract components and verify
+    const { data, signature, key_id } = parsed;
+    
+    logger.debug({
+      dataLength: data ? data.length : 0,
+      signatureLength: signature ? signature.length : 0,
+      keyId: key_id ? key_id.substring(0, 8) : 'none',
+      hasAllComponents: !!(data && signature && key_id)
+    }, 'Decoded single EC token components');
+    
+    // Check if we have all components
+    if (!data || !signature || !key_id) {
+      logger.warn('EC token missing required components, skipping');
+      return;
+    }
+    
+    // Verify components
+    await verifyAndAddECTokenComponents(
+      data, signature, key_id, 
+      results, totalValue
+    );
+  } catch (error) {
+    logger.warn({ 
+      error,
+      tokenPrefix: tokenString ? tokenString.substring(0, 20) : 'null'
+    }, 'Failed to verify single EC token');
+  }
+}
+
+// Helper function for EC token component verification
+async function verifyAndAddECTokenComponents(data, signature, key_id, results, totalValue) {
+  if (!data || !signature || !key_id) {
+    logger.warn('EC token missing required components');
+    return;
+  }
+  
+  try {
+    // Parse token data
+    const tokenData = JSON.parse(data);
+    
+    logger.debug(`Verifying EC token with ID: ${tokenData.id}`);
+    
+    // Get key pair by ID
+    const keyPair = await ecKeyManager.getKeyPairById(key_id);
+    if (!keyPair) {
+      logger.warn({ key_id }, 'EC key pair not found');
+      return;
+    }
+    
+    // Get keyset info
+    const keyset = await ecKeyManager.getKeyset(keyPair.keysetId);
+    if (!keyset) {
+      logger.warn({ keysetId: keyPair.keysetId }, 'EC keyset not found');
+      return;
+    }
+    
+    // Set currency if not already set
+    if (!totalValue.currency) {
+      totalValue.currency = keyset.currency;
+    }
+    
+    // The secret is the token ID
+    const secret = tokenData.id;
+    
+    // The signature might be in hex or base64, convert as appropriate
+    let signatureBuffer;
+    if (typeof signature === 'string') {
+      // Check if it's hex or base64
+      if (/^[0-9a-fA-F]+$/.test(signature)) {
+        signatureBuffer = Buffer.from(signature, 'hex');
+      } else {
+        // Try base64
+        try {
+          signatureBuffer = Buffer.from(signature, 'base64');
+        } catch (e) {
+          logger.warn('Could not decode EC signature as base64, trying as is');
+          signatureBuffer = Buffer.from(signature);
+        }
+      }
+    } else if (Buffer.isBuffer(signature)) {
+      signatureBuffer = signature;
+    } else {
+      logger.warn('EC signature is in an unknown format');
+      return;
+    }
+    
+    // Convert private key to buffer
+    const privateKeyBuffer = Buffer.from(keyPair.privateKey, 'hex');
+    
+    // Verify signature
+    const isValid = ecBlindSignature.verifySignature(
+      secret,
+      signatureBuffer,
+      privateKeyBuffer
+    );
+    
+    if (!isValid) {
+      logger.warn({ 
+        token_id: tokenData.id,
+        keyset_id: keyset.id,
+        keyId: key_id
+      }, 'Invalid EC signature');
+      return;
+    }
+    
+    // Check if token has been redeemed
+    const db = getDb();
+    
+    // Make sure ec_redeemed_tokens table exists
+    let hasTable = await db.schema.hasTable('ec_redeemed_tokens');
+    
+    if (!hasTable) {
+      await db.schema.createTable('ec_redeemed_tokens', table => {
+        table.string('id').primary();
+        table.string('keyset_id').notNullable();
+        table.string('key_id').notNullable();
+        table.timestamp('redeemed_at').defaultTo(db.fn.now());
+        
+        table.foreign('keyset_id').references('id').inTable('ec_keysets');
+        table.foreign('key_id').references('id').inTable('ec_keys');
+      });
+    }
+    
+    const redeemedToken = await db('ec_redeemed_tokens')
+      .where('id', tokenData.id)
+      .first();
+    
+    if (redeemedToken) {
+      logger.warn({ token_id: tokenData.id }, 'EC token already redeemed');
+      return;
+    }
+    
+    // Token is valid, add to results
+    results.push({
+      token_id: tokenData.id,
+      token_type: 'ec',
+      keyset: {
+        id: keyset.id,
+        value: keyset.value,
+        currency: keyset.currency,
+        description: keyset.description
+      },
+      isValid: true
+    });
+    
+    // Add to total value
+    totalValue.amount += keyset.value;
+    
+    logger.debug(`Successfully verified EC token: ${tokenData.id}, value: ${keyset.value}`);
+  } catch (error) {
+    logger.warn({ error }, 'Failed to verify EC token components');
+  }
+}
+
+/**
+ * Redeem an EC token
+ * 
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
+async function redeemECToken(req, res) {
+  try {
+    const { token } = req.body;
+    
+    // Validate input
+    if (!token) {
+      return res.status(400).json({
+        success: false,
+        message: 'Token is required'
+      });
+    }
+    
+    // Parse token
+    let parsedToken;
+    try {
+      if (token.startsWith('giftmint') || token.startsWith('btcpins')) {
+        // Compact token format
+        parsedToken = decodeToken(token);
+      } else {
+        // Legacy JSON format
+        parsedToken = JSON.parse(token);
+      }
+    } catch (e) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid EC token format'
+      });
+    }
+    
+    // Extract token components
+    const { data, signature, key_id } = parsedToken;
+    
+    if (!data || !signature || !key_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid EC token structure'
+      });
+    }
+    
+    // Parse token data
+    let tokenData;
+    try {
+      tokenData = JSON.parse(data);
+    } catch (e) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid EC token data'
+      });
+    }
+    
+    // Get key pair by ID
+    const keyPair = await ecKeyManager.getKeyPairById(key_id);
+    
+    // Get keyset info
+    const keyset = await ecKeyManager.getKeyset(keyPair.keysetId);
+    
+    // Verify signature
+    const secret = tokenData.id;
+    const signatureBuffer = Buffer.from(signature, 'hex');
+    const privateKeyBuffer = Buffer.from(keyPair.privateKey, 'hex');
+    
+    const isValid = ecBlindSignature.verifySignature(
+      secret,
+      signatureBuffer,
+      privateKeyBuffer
+    );
+    
+    if (!isValid) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid EC token signature'
+      });
+    }
+    
+    // Start a database transaction
+    const db = getDb();
+    
+    // Make sure ec_redeemed_tokens table exists
+    let hasTable = await db.schema.hasTable('ec_redeemed_tokens');
+    
+    if (!hasTable) {
+      await db.schema.createTable('ec_redeemed_tokens', table => {
+        table.string('id').primary();
+        table.string('keyset_id').notNullable();
+        table.string('key_id').notNullable();
+        table.timestamp('redeemed_at').defaultTo(db.fn.now());
+        
+        table.foreign('keyset_id').references('id').inTable('ec_keysets');
+        table.foreign('key_id').references('id').inTable('ec_keys');
+      });
+    }
+    
+    // Check if ec_token_stats table exists
+    hasTable = await db.schema.hasTable('ec_token_stats');
+    
+    if (!hasTable) {
+      await db.schema.createTable('ec_token_stats', table => {
+        table.string('keyset_id').primary();
+        table.integer('minted_count').defaultTo(0);
+        table.integer('redeemed_count').defaultTo(0);
+        table.timestamp('last_updated').defaultTo(db.fn.now());
+        
+        table.foreign('keyset_id').references('id').inTable('ec_keysets');
+      });
+    }
+    
+    const trx = await db.transaction();
+    
+    try {
+      // Check if token has been redeemed
+      const redeemedToken = await trx('ec_redeemed_tokens')
+        .where('id', tokenData.id)
+        .first();
+      
+      if (redeemedToken) {
+        await trx.rollback();
+        return res.status(400).json({
+          success: false,
+          message: 'EC token has already been redeemed',
+          redeemed_at: redeemedToken.redeemed_at
+        });
+      }
+      
+      // Store the token in ec_redeemed_tokens table
+      const now = new Date();
+      await trx('ec_redeemed_tokens').insert({
+        id: tokenData.id,
+        keyset_id: keyPair.keysetId,
+        key_id: key_id,
+        redeemed_at: now
+      });
+      
+      // Update token stats
+      await trx('ec_token_stats')
+        .where('keyset_id', keyPair.keysetId)
+        .increment('redeemed_count', 1)
+        .update('last_updated', now)
+        .catch(async () => {
+          // If no row exists yet, create it
+          await trx('ec_token_stats').insert({
+            keyset_id: keyPair.keysetId,
+            minted_count: 0,
+            redeemed_count: 1,
+            last_updated: now
+          });
+        });
+      
+      // Update batch stats if applicable (use the same batch_stats table as RSA tokens)
+      try {
+        // Find if this token was part of a batch by checking batch_stats
+        const batch = await trx('batch_stats')
+          .where('currency', keyset.currency)
+          .orderBy('created_at', 'desc')
+          .first();
+        
+        if (batch) {
+          // Update the redeemed value
+          await trx('batch_stats')
+            .where('batch_id', batch.batch_id)
+            .increment('redeemed_value', keyset.value)
+            .update('last_updated', now);
+        }
+      } catch (batchError) {
+        // Log but continue - batch stats are secondary
+        logger.warn({ error: batchError }, 'Failed to update batch stats for EC token');
+      }
+      
+      // Commit the transaction
+      await trx.commit();
+      
+      // Return redemption data with keyset info
+      res.status(200).json({
+        success: true,
+        token_id: tokenData.id,
+        token_type: 'ec',
+        keyset: {
+          id: keyset.id,
+          value: keyset.value,
+          currency: keyset.currency,
+          description: keyset.description
+        },
+        status: 'redeemed'
+      });
+    } catch (error) {
+      await trx.rollback();
+      throw error;
+    }
+  } catch (error) {
+    logger.error({ error }, 'Failed to redeem EC token');
+    res.status(500).json({
+      success: false,
+      message: 'Failed to redeem EC token',
+      error: error.message
+    });
+  }
+}
+
+// Map old functions to EC functions for backward compatibility
+const getOutstandingByKeysets = getOutstandingByDenomination;
+const getOutstandingECValue = getOutstandingValue;
+const getActiveKeysets = listDenominations;
+
 module.exports = {
+  // Main functions
   listDenominations,
+  getActiveKeysets,  // Alias for listDenominations
+  
+  // Token functions  
+  createECToken,
+  verifyECToken,
+  redeemECToken,
+  
+  // Stats functions
+  getOutstandingValue,
+  getOutstandingECValue,  // Alias for getOutstandingValue
+  getOutstandingByDenomination,
+  getOutstandingByKeysets,  // Alias for getOutstandingByDenomination
+  
+  // Legacy functions (now using EC implementation)
   createToken,
   verifyToken,
   redeemToken,
   remintToken,
   splitToken,
-  splitTokenImplementation, // Add implementation for testing
-  bulkCreateTokens,
-  getOutstandingValue,
-  getOutstandingByDenomination
+  splitTokenImplementation,
+  bulkCreateTokens
 };

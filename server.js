@@ -18,7 +18,7 @@ const { rateLimit } = require('express-rate-limit');
 // Import local modules
 const config = require('./config/config');
 const db = require('./db/database');
-const keyManager = require('./crypto/keyManager');
+const keyManager = require('./crypto/ecKeyManager'); // Using EC key manager only
 const apiRoutes = require('./api/routes');
 const { verifyApiKey } = require('./api/middleware');
 
@@ -113,8 +113,9 @@ async function startServer() {
     // Initialize database
     await db.init();
     
-    // Initialize key manager
+    // Initialize EC key manager
     await keyManager.init();
+    logger.info('EC Key Manager initialized successfully');
     
     // Start server
     app.listen(config.server.port, config.server.host, () => {
