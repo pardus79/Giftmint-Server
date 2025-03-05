@@ -43,24 +43,18 @@ if (config.log.file) {
     fs.mkdirSync(logDir, { recursive: true });
   }
   
-  // Create a write stream to the log file
-  const logStream = fs.createWriteStream(config.log.file, { flags: 'a' });
+  // Simply use a multi-transport logger instead of overriding methods
+  const streams = [
+    { stream: process.stdout },  // Log to console
+    { stream: fs.createWriteStream(config.log.file, { flags: 'a' }) }  // Log to file
+  ];
   
-  // Add file transport
-  const fileLogger = pino({
+  // Replace the logger with a multi-destination logger
+  logger = pino({
     level: config.log.level
-  }, logStream);
+  }, pino.multistream(streams));
   
-  // Override logger methods to write to both console and file
-  const originalLogger = { ...logger };
-  ['trace', 'debug', 'info', 'warn', 'error', 'fatal'].forEach(level => {
-    logger[level] = (obj, msg, ...args) => {
-      originalLogger[level](obj, msg, ...args);
-      fileLogger[level](obj, msg, ...args);
-    };
-  });
-  
-  logger.info(`Logging to file: ${config.log.file}`);
+  console.log(`Logging to file: ${config.log.file}`);
 }
 
 // Initialize express app
