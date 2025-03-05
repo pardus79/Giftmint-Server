@@ -344,11 +344,28 @@ function createTokenRequest(keysetId) {
     // Blind the message
     const B_ = blindMessage(Y, token.blindingFactor);
     
+    // Add debug logging for the resulting blinded message
+    logger.info({
+      B_Type: typeof B_,
+      B_IsUint8Array: B_ instanceof Uint8Array,
+      B_Length: B_ ? B_.length : 0,
+      B_FirstFewBytes: B_ && B_.length > 0 ? Buffer.from(B_.slice(0, 5)).toString('hex') : 'empty'
+    }, 'Blinded message result');
+    
+    // Make sure we're converting a proper Uint8Array to hex string
+    const blindedMessageHex = B_ instanceof Uint8Array && B_.length > 0 ? 
+      Buffer.from(B_).toString('hex') : '';
+      
+    logger.info({
+      blindedMessageHexLength: blindedMessageHex.length,
+      blindedMessageHexPrefix: blindedMessageHex.slice(0, 10)
+    }, 'Blind message hex conversion');
+    
     return {
       id: token.id,
       keysetId,
       secret: token.secret,
-      blindedMessage: B_.toString('hex'),
+      blindedMessage: blindedMessageHex,
       blindingFactor: token.blindingFactor.toString('hex')
     };
   } catch (error) {

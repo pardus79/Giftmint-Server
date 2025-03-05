@@ -2008,12 +2008,28 @@ async function createECToken(req, res) {
           // Create token request with proper keyset ID
           const tokenRequest = blindSignature.createTokenRequest(keyset.id);
           
+          // Add detailed debugging for token request
+          logger.info({
+            tokenRequestId: tokenRequest.id,
+            blindedMessageLength: tokenRequest.blindedMessage ? tokenRequest.blindedMessage.length : 0,
+            blindedMessageIsHex: typeof tokenRequest.blindedMessage === 'string' && 
+              /^[0-9a-f]+$/i.test(tokenRequest.blindedMessage)
+          }, 'Token request details');
+          
           logger.debug(`Created EC token request with ID: ${tokenRequest.id}`);
           
           // Get the private key as a Uint8Array
           const privateKey = Uint8Array.from(Buffer.from(tokenKeyPair.privateKey, 'hex'));
           
           // Sign the blinded message
+          // Check if blindedMessage is valid before processing
+          if (!tokenRequest.blindedMessage || tokenRequest.blindedMessage.length === 0) {
+            logger.error({
+              tokenRequest: JSON.stringify(tokenRequest)
+            }, 'Invalid token request - missing or empty blindedMessage');
+            throw new Error('Invalid token request - missing blindedMessage');
+          }
+          
           // Convert the blinded message from hex string to Uint8Array for the secp256k1 library
           const blindedMessage = Uint8Array.from(Buffer.from(tokenRequest.blindedMessage, 'hex'));
           
@@ -2023,6 +2039,8 @@ async function createECToken(req, res) {
             blindedMessageIsArray: Array.isArray(blindedMessage),
             blindedMessageIsUint8Array: blindedMessage instanceof Uint8Array,
             blindedMessageLength: blindedMessage.length,
+            blindedMessageFirstBytes: blindedMessage.length > 5 ? 
+              Buffer.from(blindedMessage.slice(0, 5)).toString('hex') : 'empty',
             privateKeyType: typeof privateKey,
             privateKeyIsUint8Array: privateKey instanceof Uint8Array,
             privateKeyLength: privateKey.length
