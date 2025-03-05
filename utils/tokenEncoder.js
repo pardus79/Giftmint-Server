@@ -227,9 +227,10 @@ async function bundleTokens(tokens, customPrefix) {
     //   ]
     // }
     
+    // Create minimal version of the token structure (using short keys like Cashu does)
     const tokenV4 = {
-      // Mint URL (optional in Cashu)
-      m: "Giftmint Server",
+      // Use just a short mint identifier 
+      m: "GM",  // "Giftmint" shortened to save space
       // Unit (required in Cashu)
       u: "sat",
       // Tokens array grouped by keyset ID
@@ -263,14 +264,21 @@ async function bundleTokens(tokens, customPrefix) {
               signatureBuffer = Buffer.from(token.signature);
             }
             
-            return {
-              // Amount (integer)
-              a: token.amount,
+            // Create proof with optimized field structure for minimal encoding size
+            // Only include amount if non-default (default is 1)
+            const proof = {
               // Secret (string) - keeping as string since it's needed for lookups
               s: token.id,
-              // Signature as raw buffer for compact binary representation
+              // Signature as raw buffer for compact binary representation 
               c: signatureBuffer
             };
+            
+            // Only add amount if not the default value of 1 to save space
+            if (token.amount !== 1) {
+              proof.a = token.amount;
+            }
+            
+            return proof;
           })
         };
       })
@@ -354,12 +362,21 @@ async function bundleTokens(tokens, customPrefix) {
               // Convert key ID to Buffer for compact representation
               i: Buffer.from(keyId, 'utf8'),
               // Convert each proof to use binary format for signatures
-              p: tokensByKeyId[keyId].map(token => ({
-                a: token.amount,  // Keep amount as integer
-                s: token.id,      // Keep ID as string (needed for lookups)
-                // Convert signature to Buffer for compact binary representation
-                c: Buffer.from(token.signature, 'base64')  
-              }))
+              p: tokensByKeyId[keyId].map(token => {
+                // Create optimized proof structure - omit amount if default value (1)
+                const proof = {
+                  s: token.id,      // Keep ID as string (needed for lookups)
+                  // Convert signature to Buffer for compact binary representation
+                  c: Buffer.from(token.signature, 'base64')
+                };
+                
+                // Only add amount if not the default value of 1 to save space
+                if (token.amount !== 1) {
+                  proof.a = token.amount;
+                }
+                
+                return proof;
+              })
             };
           });
           
@@ -407,7 +424,7 @@ async function bundleTokens(tokens, customPrefix) {
         tokenV4.t.push({
           i: Buffer.from(tokenObject.key_id, 'utf8'),
           p: [{
-            a: 1, // Default amount
+            // Omit 'a' (amount) field since default is 1, saving space
             s: dataObj.id,
             c: Buffer.from(tokenObject.signature, 'base64')
           }]
@@ -421,9 +438,9 @@ async function bundleTokens(tokens, customPrefix) {
         tokenV4.t.push({
           i: Buffer.from("fallback-key-id", 'utf8'),
           p: [{
-            a: 1,
-            s: "fallback-secret-" + Date.now(),
-            c: Buffer.from("fallback-signature", 'utf8')
+            // Omit 'a' field to save space (default is 1)
+            s: "f-" + Date.now(), // Short fallback ID to save space
+            c: Buffer.from([0]) // Minimal signature for space savings
           }]
         });
       }
@@ -445,12 +462,30 @@ async function bundleTokens(tokens, customPrefix) {
       firstFewGroupSizes: tokenV4.t.slice(0, 3).map(g => g.p.length)
     }, 'Token structure before CBOR encoding');
     
-    // Encode using CBOR
-    const cborData = cbor.encode(tokenV4);
+    // Apply compression techniques to minimize CBOR size
+    // First, convert the large signatures to Uint8Array for compact encoding
+    tokenV4.t.forEach(group => {
+      if (group.p && Array.isArray(group.p)) {
+        group.p.forEach(proof => {
+          if (Buffer.isBuffer(proof.c)) {
+            // Convert to Uint8Array for more compact encoding in CBOR
+            proof.c = new Uint8Array(proof.c);
+          }
+        });
+      }
+    });
+    
+    // Use canonical mode for most compact encoding
+    const encodeOptions = { canonical: true, highCompression: true };
+    
+    // Encode using CBOR with optimized options
+    const cborData = cbor.encode(tokenV4, encodeOptions);
     
     // Detailed debugging of CBOR data
     logger.debug({
       cborLength: cborData.length,
+      originalObjectSize: JSON.stringify(tokenV4).length,
+      compressionRatio: (JSON.stringify(tokenV4).length / cborData.length).toFixed(2) + 'x',
       cborHexPrefix: cborData.slice(0, 20).toString('hex')
     }, 'CBOR data details');
     
