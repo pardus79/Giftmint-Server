@@ -2391,7 +2391,12 @@ async function verifyECToken(req, res) {
     logger.debug({ tokenPrefix: token.substring(0, 20) + '...' }, 'Received EC token for verification');
     
     // Check if this is a bundle - handle it similarly to RSA tokens but using EC verification
-    if (token.includes('B') && (token.startsWith('btcpins') || token.startsWith('giftmint'))) {
+    // Added more robust detection for proper handling of the token format
+    if ((token.includes('B') || token.includes('btcpinsB')) && 
+        (token.startsWith('btcpins') || token.startsWith('giftmint'))) {
+      
+      // Make sure we have the decoder utility
+      const { decodeToken } = require('../utils/tokenEncoder');
       logger.info('Detected bundle format for EC tokens, attempting to unbundle and verify');
       
       try {

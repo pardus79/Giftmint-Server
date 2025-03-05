@@ -632,6 +632,13 @@ async function bundleTokens(tokens, customPrefix) {
     // Step 1: Convert to base64 using built-in methods
     let base64Bundle = cborData.toString('base64');
     
+    // Log raw base64 for debug
+    logger.debug({
+      rawBase64Length: base64Bundle.length,
+      rawBase64Prefix: base64Bundle.substring(0, 20),
+      rawBase64Suffix: base64Bundle.substring(base64Bundle.length - 20)
+    }, 'Raw base64 data before URL-safe conversion');
+
     // Step 2: Apply URL-safe transformations in one pass with efficient regex
     // - Replace + with - (URL safe)
     // - Replace / with _ (URL safe)
@@ -645,6 +652,24 @@ async function bundleTokens(tokens, customPrefix) {
     // The Cashu spec uses a prefix+'B' format where B indicates binary CBOR encoding
     // Using the shortest possible valid prefix to minimize overall token size
     const prefix = getTokenPrefix(customPrefix);
+    
+    // Extra validation - ensure we have valid base64url content
+    if (!/^[A-Za-z0-9\-_]+$/.test(base64Bundle)) {
+      logger.warn({
+        invalidChars: base64Bundle.match(/[^A-Za-z0-9\-_]/g),
+        base64Length: base64Bundle.length
+      }, 'Base64URL contains invalid characters, will sanitize');
+      
+      // Remove any invalid characters
+      base64Bundle = base64Bundle.replace(/[^A-Za-z0-9\-_]/g, '');
+    }
+    
+    // Final validation checks
+    logger.debug({
+      finalBase64Length: base64Bundle.length,
+      finalBase64Prefix: base64Bundle.substring(0, 20),
+      isValidBase64URL: /^[A-Za-z0-9\-_]+$/.test(base64Bundle)
+    }, 'Final base64 URL-safe string');
     
     // Step 4: Final assembly with minimal separator character
     // 'B' is used to indicate CBOR binary format per Cashu V4 spec
@@ -868,7 +893,47 @@ function decodeToken(encodedToken) {
  */
 function unbundleTokens(bundleString) {
   try {
-    logger.debug({ bundle: bundleString.substring(0, 20) + '...' }, 'Unbundling tokens');
+    logger.debug({ 
+      bundle: bundleString.substring(0, 20) + '...',
+      bundleLength: bundleString.length,
+      bundleType: typeof bundleString
+    }, 'Unbundling tokens');
+    
+    // Validate the input
+    if (!bundleString || typeof bundleString !== 'string') {
+      throw new Error('Invalid bundle: not a string');
+    }
+    
+    // First, check if it's already an array or object (may have been parsed already)
+    if (
+      (typeof bundleString === 'object' && bundleString !== null) || 
+      bundleString.startsWith('{') || 
+      bundleString.startsWith('[')
+    ) {
+      try {
+        // If it's a string that looks like JSON, try to parse it
+        const parsedBundle = typeof bundleString === 'string' ? 
+          JSON.parse(bundleString) : bundleString;
+          
+        logger.debug('Bundle appears to be JSON, using directly');
+        
+        // If it's an array, assume it's an array of tokens
+        if (Array.isArray(parsedBundle)) {
+          return {
+            v: 1,
+            t: parsedBundle,
+            c: parsedBundle.length,
+            format: 'array'
+          };
+        }
+        
+        // Otherwise assume it's a properly structured bundle
+        return parsedBundle;
+      } catch (jsonError) {
+        logger.warn({error: jsonError}, 'Failed to parse bundle as JSON');
+        // Continue to other methods
+      }
+    }
     
     // Check for CBOR format - Cashu V4 style with 'B' marker
     const hasCborPrefix = bundleString.match(/[a-zA-Z]+B/);
@@ -883,8 +948,26 @@ function unbundleTokens(bundleString) {
         
         if (prefixEnd !== -1) {
           // Extract the base64 part
-          const base64Bundle = bundleString.slice(prefixEnd + 1);
+          let base64Bundle = bundleString.slice(prefixEnd + 1);
           logger.debug({ base64Bundle: base64Bundle.substring(0, 20) + '...' }, 'Extracted base64 CBOR bundle');
+
+          // First, try to detect the real base64 start by looking for valid base64 characters
+          let actualBase64Start = 0;
+          for (let i = 0; i < Math.min(base64Bundle.length, 20); i++) {
+            const char = base64Bundle[i];
+            // Valid base64url chars are A-Z, a-z, 0-9, -, _
+            const isValidChar = /[A-Za-z0-9\-_]/.test(char);
+            if (!isValidChar) {
+              actualBase64Start = i + 1;
+            } else {
+              break; // Found start of valid base64
+            }
+          }
+          
+          if (actualBase64Start > 0) {
+            logger.debug(`Adjusting base64 start by ${actualBase64Start} characters`);
+            base64Bundle = base64Bundle.slice(actualBase64Start);
+          }
           
           // Restore the URL-safe base64 to regular base64
           let standardBase64 = base64Bundle
@@ -896,12 +979,56 @@ function unbundleTokens(bundleString) {
             standardBase64 += '=';
           }
           
+          logger.debug({
+            standardBase64Length: standardBase64.length,
+            standardBase64Prefix: standardBase64.substring(0, 20)
+          }, 'Processed base64 with padding');
+          
           // Decode the base64 string to get CBOR data
           const bundleBuffer = Buffer.from(standardBase64, 'base64');
           
+          // Output hex dump for debugging
+          const hexDump = bundleBuffer.length > 0 ? 
+            bundleBuffer.slice(0, Math.min(32, bundleBuffer.length)).toString('hex').match(/.{1,2}/g).join(' ') : 
+            'empty buffer';
+            
+          logger.debug({
+            bufferLength: bundleBuffer.length,
+            hexDump: hexDump,
+            firstBytes: Array.from(bundleBuffer.slice(0, Math.min(8, bundleBuffer.length)))
+          }, 'Bundle buffer details');
+          
           try {
-            // Decode CBOR with better error handling and debugging
-            const cborBundle = cbor.decodeFirstSync(bundleBuffer);
+            // Make sure we have a valid buffer to decode
+            if (!bundleBuffer || bundleBuffer.length === 0) {
+              throw new Error('Empty buffer, cannot decode CBOR');
+            }
+            
+            // Try a more robust decoding approach with multiple fallbacks
+            let cborBundle;
+            try {
+              // First try with the standard decoder
+              cborBundle = cbor.decodeFirstSync(bundleBuffer);
+            } catch (firstError) {
+              logger.warn({error: firstError}, 'First CBOR decode attempt failed, trying with diagnostic mode');
+              
+              // If that fails, try examining what we have
+              const diagnostics = cbor.diagnose(bundleBuffer);
+              logger.debug({diagnostics: diagnostics.substring(0, 200)}, 'CBOR diagnostics');
+              
+              // Try to parse the diagnostic output if it looks like JSON
+              if (diagnostics.startsWith('{') || diagnostics.startsWith('[')) {
+                try {
+                  cborBundle = JSON.parse(diagnostics);
+                  logger.info('Successfully parsed CBOR diagnostics as JSON');
+                } catch (jsonError) {
+                  // Throw the original error if we can't parse the diagnostics
+                  throw firstError;
+                }
+              } else {
+                throw firstError;
+              }
+            }
             
             // Debug info - adapting to different possible CBOR structures
             logger.debug({ 
