@@ -3027,6 +3027,132 @@ const getOutstandingByKeysets = getOutstandingByDenomination;
 const getOutstandingECValue = getOutstandingValue;
 const getActiveKeysets = listDenominations;
 
+/**
+ * Direct endpoint for troubleshooting individual token verification
+ * 
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object 
+ */
+async function verifyIndividualTokenEndpoint(req, res) {
+  try {
+    const { token } = req.body;
+    
+    if (!token) {
+      return res.status(400).json({
+        success: false,
+        message: 'Token is required'
+      });
+    }
+    
+    logger.debug({
+      tokenType: typeof token,
+      tokenLength: token.length,
+      tokenPrefix: token.substring(0, Math.min(20, token.length))
+    }, 'Verifying individual token directly');
+    
+    // Try to get the prefix and strip it
+    let tokenContent = token;
+    let prefix = '';
+    
+    const prefixMatch = token.match(/^[a-zA-Z]+/);
+    if (prefixMatch) {
+      prefix = prefixMatch[0];
+      tokenContent = token.substring(prefix.length);
+      logger.debug({ prefix }, 'Found token prefix');
+    }
+    
+    // Decode token
+    try {
+      const { decodeToken } = require('../utils/tokenEncoder');
+      
+      // Try to decode and provide detailed info
+      const decodedToken = decodeToken(token);
+      
+      logger.debug({
+        decodedTokenType: typeof decodedToken,
+        decodedTokenKeys: Object.keys(decodedToken),
+        hasData: !!decodedToken.data,
+        hasSignature: !!decodedToken.signature,
+        hasKeyId: !!decodedToken.key_id
+      }, 'Token decoded successfully');
+      
+      // Attempt to verify the individual token
+      let verified = false;
+      let value = 0;
+      let keysetInfo = null;
+      
+      try {
+        // Extract token components
+        const { data, signature, key_id } = decodedToken;
+        
+        // Parse data if needed
+        const tokenData = typeof data === 'string' ? JSON.parse(data) : data;
+        
+        // Get key pair
+        const keyPair = await ecKeyManager.getKeyPairById(key_id);
+        
+        // Get keyset info
+        const keyset = await ecKeyManager.getKeyset(keyPair.keysetId);
+        
+        // Verify the signature using EC verification
+        const secret = tokenData.id;
+        const signatureBuffer = Buffer.from(signature, 'hex');
+        const privateKeyBuffer = Buffer.from(keyPair.privateKey, 'hex');
+        
+        verified = blindSignature.verifySignature(
+          secret,
+          signatureBuffer,
+          privateKeyBuffer
+        );
+        
+        if (verified) {
+          value = keyset.value;
+          keysetInfo = {
+            id: keyset.id,
+            value: keyset.value,
+            currency: keyset.currency,
+            description: keyset.description
+          };
+        }
+      } catch (verifyError) {
+        logger.error({ error: verifyError }, 'Error verifying individual token');
+      }
+      
+      // Return detailed diagnostics
+      return res.status(200).json({
+        success: true,
+        original_token: token,
+        token_prefix: prefix,
+        decoded_token: decodedToken,
+        verification_result: {
+          is_valid: verified,
+          value: value,
+          keyset_info: keysetInfo
+        },
+        debug_info: {
+          token_type: 'ec',
+          token_length: token.length,
+          decoded_data_type: typeof decodedToken.data
+        }
+      });
+      
+    } catch (decodeError) {
+      logger.error({ error: decodeError }, 'Failed to decode token');
+      return res.status(400).json({
+        success: false,
+        message: `Token decode error: ${decodeError.message}`,
+        original_token: token.substring(0, 50) + '...'
+      });
+    }
+  } catch (error) {
+    logger.error({ error }, 'Individual token verification failed');
+    return res.status(500).json({
+      success: false,
+      message: `Individual token verification error: ${error.message}`
+    });
+  }
+}
+
 module.exports = {
   // Main functions
   listDenominations,
@@ -3050,5 +3176,8 @@ module.exports = {
   remintToken,
   splitToken,
   splitTokenImplementation,
-  bulkCreateTokens
+  bulkCreateTokens,
+  
+  // Diagnostic endpoints
+  verifyIndividualTokenEndpoint
 };
