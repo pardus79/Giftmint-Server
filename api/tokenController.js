@@ -37,6 +37,9 @@ async function createToken(req, res) {
     let tokenPrefix = config.token.prefix;
     if (custom_prefix) {
       tokenPrefix = custom_prefix;
+      console.log(`Using custom prefix: ${tokenPrefix} from request`);
+    } else {
+      console.log(`Using default prefix: ${tokenPrefix} from config`);
     }
     
     // Get optimal combination of denominations
