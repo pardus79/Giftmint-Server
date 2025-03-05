@@ -71,6 +71,20 @@ function toUint8Array(input, encoding = 'hex') {
         logger.error('Empty string passed to toUint8Array');
         throw new Error('Empty string input to toUint8Array');
       }
+      
+      // Check if this is a comma-separated string (toString() artifact)
+      if (input.includes(',')) {
+        logger.warn('Comma-separated string detected, attempting to convert');
+        try {
+          // Try to convert comma-separated string to proper hex
+          // This happens when .toString() is called on a Buffer without specifying 'hex'
+          return new Uint8Array(input.split(',').map(Number));
+        } catch (e) {
+          logger.error('Failed to convert comma-separated string');
+          throw new Error('Invalid comma-separated string');
+        }
+      }
+      
       return new Uint8Array(Buffer.from(input, encoding));
     }
     
@@ -581,6 +595,15 @@ function processSignedToken(tokenRequest, blindSignature, publicKey) {
     let K = null;
     
     try {
+      // Check if blindSignature is a valid hex string (should be digits and a-f only)
+      if (typeof blindSignature === 'string' && !/^[0-9a-f]+$/i.test(blindSignature)) {
+        logger.error({ 
+          blindSignature: blindSignature.substring(0, 30),
+          isValidHex: /^[0-9a-f]+$/i.test(blindSignature)
+        }, 'blindSignature is not a valid hex string');
+        throw new Error('blindSignature is not a valid hex string');
+      }
+      
       C_ = toUint8Array(blindSignature, 'hex');
       logger.debug({ C_Length: C_.length }, 'Converted blindSignature to Uint8Array');
     } catch (e) {
@@ -597,6 +620,15 @@ function processSignedToken(tokenRequest, blindSignature, publicKey) {
     }
     
     try {
+      // Check if publicKey is a valid hex string (should be digits and a-f only)
+      if (typeof publicKey === 'string' && !/^[0-9a-f]+$/i.test(publicKey)) {
+        logger.error({ 
+          publicKey: publicKey.substring(0, 30),
+          isValidHex: /^[0-9a-f]+$/i.test(publicKey)
+        }, 'publicKey is not a valid hex string');
+        throw new Error('publicKey is not a valid hex string');
+      }
+      
       K = toUint8Array(publicKey, 'hex');
       logger.debug({ KLength: K.length }, 'Converted publicKey to Uint8Array');
     } catch (e) {

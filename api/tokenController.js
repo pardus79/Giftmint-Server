@@ -2063,10 +2063,13 @@ async function createECToken(req, res) {
               blindingFactorLength: tokenRequest.blindingFactor ? tokenRequest.blindingFactor.length : 0
             }, 'Debug before processSignedToken');
             
+            // Fix the signature conversion - use Buffer.from().toString('hex') instead of toString('hex') directly
+            const signatureHex = Buffer.from(signature).toString('hex');
+            
             // Process the signed token
             const finishedToken = blindSignature.processSignedToken(
               tokenRequest,
-              signature.toString('hex'),
+              signatureHex,
               tokenKeyPair.publicKey
             );
             
