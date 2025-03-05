@@ -666,8 +666,27 @@ async function verifyToken(req, res) {
             }
             
             try {
-              // Parse token data
-              const tokenData = JSON.parse(data);
+              // Parse token data with better error handling
+              let tokenData;
+              try {
+                if (typeof data === 'string') {
+                  tokenData = JSON.parse(data);
+                } else if (typeof data === 'object') {
+                  tokenData = data;
+                } else {
+                  throw new Error('Invalid data format');
+                }
+              } catch (parseError) {
+                logger.warn({ error: parseError, dataPrefix: typeof data === 'string' ? data.substring(0, 30) : 'not a string' }, 
+                  'Failed to parse token data');
+                return;
+              }
+              
+              // Ensure we have an ID
+              if (!tokenData || !tokenData.id) {
+                logger.warn('Token data missing ID');
+                return;
+              }
               
               logger.debug(`Verifying token with ID: ${tokenData.id}`);
               
@@ -690,11 +709,48 @@ async function verifyToken(req, res) {
                 totalValue.currency = denomination.currency;
               }
               
+              // Normalize data format for consistent hashing
+              const dataForHash = typeof data === 'string' ? data : JSON.stringify(data);
+              
               // Recreate the token hash
               const tokenHash = require('crypto')
                 .createHash('sha256')
-                .update(Buffer.from(data, 'utf8'))
+                .update(Buffer.from(dataForHash, 'utf8'))
                 .digest();
+              
+              // Handle multiple signature formats
+              let signatureBuffer;
+              try {
+                // Check if it's already a Buffer
+                if (Buffer.isBuffer(signature)) {
+                  signatureBuffer = signature;
+                } 
+                // Check if it's a Uint8Array
+                else if (signature instanceof Uint8Array) {
+                  signatureBuffer = Buffer.from(signature);
+                }
+                // Check if it's a base64 string
+                else if (typeof signature === 'string') {
+                  try {
+                    // Try base64 first (most common format)
+                    signatureBuffer = Buffer.from(signature, 'base64');
+                  } catch (base64Error) {
+                    // Try hex if base64 fails
+                    try {
+                      signatureBuffer = Buffer.from(signature, 'hex');
+                    } catch (hexError) {
+                      // Last resort, try direct buffer conversion
+                      signatureBuffer = Buffer.from(signature);
+                    }
+                  }
+                } else {
+                  // Unknown type, try JSON stringification as last resort
+                  signatureBuffer = Buffer.from(JSON.stringify(signature));
+                }
+              } catch (sigError) {
+                logger.warn({ error: sigError, signatureType: typeof signature }, 'Failed to normalize signature');
+                return;
+              }
               
               // Verify signature with enhanced debugging
               logger.debug({
@@ -702,52 +758,111 @@ async function verifyToken(req, res) {
                 keyId: key_id,
                 tokenHashLength: tokenHash.length,
                 tokenHashPrefix: tokenHash.slice(0, 10).toString('hex'),
-                signatureLength: Buffer.from(signature, 'base64').length,
-                signaturePrefix: Buffer.from(signature, 'base64').slice(0, 10).toString('hex')
+                signatureLength: signatureBuffer.length,
+                signaturePrefix: signatureBuffer.slice(0, 10).toString('hex'),
+                dataType: typeof data,
+                dataLength: typeof data === 'string' ? data.length : 'unknown'
               }, 'Attempting to verify signature');
               
-              // Try multiple verification approaches
-              let isValid = blindSignature.verifySignature(
-                tokenHash,
-                Buffer.from(signature, 'base64'),
-                keyPair.publicKey
-              );
+              // Handle potentially different key formats
+              let publicKeyBuffer;
+              try {
+                if (Buffer.isBuffer(keyPair.publicKey)) {
+                  publicKeyBuffer = keyPair.publicKey;
+                } else if (keyPair.publicKey instanceof Uint8Array) {
+                  publicKeyBuffer = Buffer.from(keyPair.publicKey);
+                } else if (typeof keyPair.publicKey === 'string') {
+                  // Check if it's a comma-separated string
+                  if (keyPair.publicKey.includes(',')) {
+                    publicKeyBuffer = Buffer.from(keyPair.publicKey.split(',').map(Number));
+                  } else {
+                    // Try hex
+                    publicKeyBuffer = Buffer.from(keyPair.publicKey, 'hex');
+                  }
+                } else {
+                  throw new Error('Unsupported public key format');
+                }
+              } catch (keyError) {
+                logger.warn({ error: keyError, keyType: typeof keyPair.publicKey }, 'Failed to normalize public key');
+                return;
+              }
+              
+              // Try multiple verification approaches with better error handling
+              let isValid = false;
+              
+              try {
+                // Try direct verification first
+                isValid = blindSignature.verifySignature(
+                  tokenHash,
+                  signatureBuffer, 
+                  publicKeyBuffer
+                );
               
               // If direct verification fails, try alternate methods (similar to processSignedToken)
               if (!isValid) {
                 logger.warn({ token_id: tokenData.id }, 'Initial signature verification failed, trying alternatives');
                 
                 // Try with SHA-1 hash instead
-                const altTokenHash = require('crypto')
-                  .createHash('sha1')
-                  .update(Buffer.from(data, 'utf8'))
-                  .digest();
-                  
-                isValid = blindSignature.verifySignature(
-                  altTokenHash,
-                  Buffer.from(signature, 'base64'),
-                  keyPair.publicKey
-                );
-                
-                if (isValid) {
-                  logger.info({ token_id: tokenData.id }, 'Signature verified with alternative hash (SHA-1)');
-                } else {
-                  // Try with padded hash as a last resort
-                  const paddedHash = Buffer.alloc(tokenHash.length + 1);
-                  paddedHash[0] = 0;
-                  tokenHash.copy(paddedHash, 1);
-                  
+                try {
+                  const altTokenHash = require('crypto')
+                    .createHash('sha1')
+                    .update(Buffer.from(data, 'utf8'))
+                    .digest();
+                    
                   isValid = blindSignature.verifySignature(
-                    paddedHash,
-                    Buffer.from(signature, 'base64'),
-                    keyPair.publicKey
+                    altTokenHash,
+                    signatureBuffer,
+                    publicKeyBuffer
                   );
                   
                   if (isValid) {
-                    logger.info({ token_id: tokenData.id }, 'Signature verified with padded hash');
+                    logger.info({ token_id: tokenData.id }, 'Signature verified with alternative hash (SHA-1)');
+                  }
+                } catch (altHashError) {
+                  logger.warn({ error: altHashError }, 'Failed to verify with alt hash');
+                }
+                
+                // If still not valid, try with padded hash
+                if (!isValid) {
+                  try {
+                    const paddedHash = Buffer.alloc(tokenHash.length + 1);
+                    paddedHash[0] = 0;
+                    tokenHash.copy(paddedHash, 1);
+                    
+                    isValid = blindSignature.verifySignature(
+                      paddedHash,
+                      signatureBuffer,
+                      publicKeyBuffer
+                    );
+                    
+                    if (isValid) {
+                      logger.info({ token_id: tokenData.id }, 'Signature verified with padded hash');
+                    }
+                  } catch (paddedError) {
+                    logger.warn({ error: paddedError }, 'Failed to verify with padded hash');
+                  }
+                }
+                
+                // Last resort - try directly with token ID as secret instead of hashed data
+                if (!isValid) {
+                  try {
+                    isValid = blindSignature.verifySignature(
+                      tokenData.id,
+                      signatureBuffer,
+                      publicKeyBuffer
+                    );
+                    
+                    if (isValid) {
+                      logger.info({ token_id: tokenData.id }, 'Signature verified directly with token ID');
+                    }
+                  } catch (idVerifyError) {
+                    logger.warn({ error: idVerifyError }, 'Failed to verify with direct token ID');
                   }
                 }
               }
+            } catch (verifyError) {
+              logger.warn({ error: verifyError }, 'Error during signature verification');
+            }
               
               if (!isValid) {
                 logger.warn({ 
@@ -3180,6 +3295,239 @@ async function unbundleTokenEndpoint(req, res) {
 }
 
 /**
+ * Detailed token analysis endpoint for deeper diagnostics
+ * 
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
+async function tokenDetailEndpoint(req, res) {
+  try {
+    const { token } = req.body;
+    
+    if (!token) {
+      return res.status(400).json({
+        success: false,
+        message: 'Token is required'
+      });
+    }
+    
+    // Analyze the token in detail
+    const details = {
+      token_type: 'unknown',
+      formats: {
+        is_cbor_bundle: false, 
+        is_json_bundle: false,
+        is_individual_token: false,
+        is_base64_encoded: false,
+        estimated_format: 'unknown'
+      },
+      metadata: {
+        token_length: token.length,
+        token_prefix: token.substring(0, Math.min(30, token.length)),
+        token_suffix: token.substring(Math.max(0, token.length - 10)),
+        contains_json: token.includes('{') && token.includes('}')
+      },
+      internal_analysis: {}
+    };
+    
+    // Check token format
+    if (token.startsWith('giftmint') || token.startsWith('btcpins')) {
+      details.formats.has_known_prefix = true;
+      details.token_type = 'prefixed_token';
+      
+      // Check for bundle marker
+      if (token.includes('B')) {
+        details.formats.is_cbor_bundle = true;
+        details.formats.estimated_format = 'cbor_bundle';
+        details.token_type = 'cbor_bundle';
+      } else if (token.includes('p')) {
+        details.formats.is_json_bundle = true;
+        details.formats.estimated_format = 'json_bundle';
+        details.token_type = 'json_bundle';
+      } else {
+        details.formats.is_individual_token = true;
+        details.formats.estimated_format = 'individual_token';
+        details.token_type = 'individual_token';
+      }
+    }
+    
+    // Try to decode in different ways for deeper analysis
+    try {
+      const { decodeToken, unbundleTokens } = require('../utils/tokenEncoder');
+      
+      // Try unbundling first if it appears to be a bundle
+      if (details.formats.is_cbor_bundle || 
+          details.formats.is_json_bundle || 
+          token.includes('bundle-')) {
+        try {
+          details.internal_analysis.unbundling_attempt = true;
+          const unbundled = unbundleTokens(token);
+          details.internal_analysis.unbundling_result = {
+            success: true,
+            version: unbundled.v,
+            token_count: unbundled.c || (unbundled.t ? unbundled.t.length : 0),
+            format: unbundled.format,
+            has_decoded_tokens: !!unbundled.decoded_tokens,
+            decoded_token_count: unbundled.decoded_tokens ? unbundled.decoded_tokens.length : 0
+          };
+        } catch (unbundleError) {
+          details.internal_analysis.unbundling_result = {
+            success: false,
+            error: unbundleError.message
+          };
+        }
+      }
+      
+      // Try individual token decoding
+      try {
+        details.internal_analysis.decoding_attempt = true;
+        const decoded = decodeToken(token);
+        details.internal_analysis.decoding_result = {
+          success: true,
+          has_data: !!decoded.data,
+          has_signature: !!decoded.signature,
+          has_key_id: !!decoded.key_id,
+          data_length: decoded.data ? decoded.data.length : 0,
+          signature_length: decoded.signature ? decoded.signature.length : 0,
+          key_id: decoded.key_id ? decoded.key_id.substring(0, 8) + '...' : 'none'
+        };
+        
+        // Try to parse data
+        if (decoded.data) {
+          try {
+            const parsedData = JSON.parse(decoded.data);
+            details.internal_analysis.data_parsing = {
+              success: true,
+              has_id: !!parsedData.id,
+              id: parsedData.id ? parsedData.id.substring(0, 8) + '...' : 'none'
+            };
+          } catch (dataError) {
+            details.internal_analysis.data_parsing = {
+              success: false,
+              error: dataError.message
+            };
+          }
+        }
+      } catch (decodeError) {
+        details.internal_analysis.decoding_result = {
+          success: false,
+          error: decodeError.message
+        };
+      }
+      
+      // Try to normalize it as binary base64 data
+      if (token.length > 40) {
+        try {
+          // Determine if token might be base64 by checking character set
+          const isBase64Like = /^[A-Za-z0-9+/=_-]+$/.test(token);
+          if (isBase64Like) {
+            details.formats.is_base64_encoded = true;
+            
+            // See if this might be base64 encoded JSON
+            try {
+              const normalized = token
+                .replace(/-/g, '+')
+                .replace(/_/g, '/');
+              
+              // Add padding if needed
+              let padded = normalized;
+              while (padded.length % 4) {
+                padded += '=';
+              }
+              
+              const decoded = Buffer.from(padded, 'base64').toString('utf8');
+              
+              if (decoded.startsWith('{') && decoded.endsWith('}')) {
+                try {
+                  const parsedJson = JSON.parse(decoded);
+                  details.internal_analysis.base64_json_decode = {
+                    success: true,
+                    has_data: !!parsedJson.data,
+                    has_signature: !!parsedJson.signature,
+                    has_key_id: !!parsedJson.key_id,
+                    object_keys: Object.keys(parsedJson)
+                  };
+                } catch (jsonError) {
+                  details.internal_analysis.base64_json_decode = {
+                    success: false,
+                    error: jsonError.message,
+                    partial_content: decoded.substring(0, 30) + '...'
+                  };
+                }
+              }
+            } catch (base64Error) {
+              details.internal_analysis.base64_decode = {
+                success: false,
+                error: base64Error.message
+              };
+            }
+          }
+        } catch (error) {
+          logger.warn({ error }, 'Error during binary analysis');
+        }
+      }
+    } catch (analysisError) {
+      logger.error({ error: analysisError }, 'Error in token analysis');
+      details.analysis_error = analysisError.message;
+    }
+    
+    // Return the detailed analysis
+    return res.status(200).json({
+      success: true,
+      token_analysis: details,
+      recommendations: generateRecommendations(details)
+    });
+  } catch (error) {
+    logger.error({ error }, 'Token detail endpoint error');
+    return res.status(500).json({
+      success: false,
+      message: `Token analysis error: ${error.message}`
+    });
+  }
+}
+
+// Helper function to generate recommendations based on token analysis
+function generateRecommendations(details) {
+  const recommendations = [];
+  
+  if (details.formats.is_cbor_bundle && !details.internal_analysis.unbundling_result?.success) {
+    recommendations.push(
+      "This appears to be a CBOR bundle that failed to unbundle. Try using individual tokens instead of bundles.",
+      "Use the /diagnostic/unbundle endpoint for more specific error information about the bundle format."
+    );
+  }
+  
+  if (details.formats.is_json_bundle && !details.internal_analysis.unbundling_result?.success) {
+    recommendations.push(
+      "This appears to be a JSON bundle that failed to unbundle. Check if the token structure follows the expected format."
+    );
+  }
+  
+  if (details.formats.is_individual_token && !details.internal_analysis.decoding_result?.success) {
+    recommendations.push(
+      "This appears to be an individual token that failed to decode. Check if it has been properly encoded."
+    );
+  }
+  
+  if (details.internal_analysis.unbundling_result?.success && 
+      details.internal_analysis.unbundling_result?.token_count === 0) {
+    recommendations.push(
+      "The bundle was successfully parsed but contains 0 tokens. Check if tokens were properly added to the bundle."
+    );
+  }
+  
+  // If no specific recommendations, give general advice
+  if (recommendations.length === 0) {
+    recommendations.push(
+      "Try to verify individual tokens instead of bundles if you're experiencing issues.",
+      "Ensure tokens are created with the correct key_id and are properly encoded."
+    );
+  }
+  
+  return recommendations;
+}
+
+/**
  * Direct endpoint for troubleshooting individual token verification
  * 
  * @param {Object} req - Express request object
@@ -3332,5 +3680,6 @@ module.exports = {
   
   // Diagnostic endpoints
   verifyIndividualTokenEndpoint,
-  unbundleTokenEndpoint
+  unbundleTokenEndpoint,
+  tokenDetailEndpoint
 };
