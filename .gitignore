@@ -22,6 +22,9 @@ db/*.db
 db/*.sqlite
 db/*.sqlite3
 
+# Key storage
+keys/
+
 # Coverage directory used by tools like istanbul
 coverage
 *.lcov
@@ -46,3 +49,6 @@ coverage
 .vscode/
 *.swp
 *.swo
+
+# OS specific
+.DS_Store
