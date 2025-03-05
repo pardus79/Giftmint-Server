@@ -120,6 +120,65 @@ function getDbConfig() {
  * Create database tables
  */
 async function createTables() {
+  // Create EC tables for the new implementation
+  const hasEcKeysetsTable = await db.schema.hasTable('ec_keysets');
+  if (!hasEcKeysetsTable) {
+    await db.schema.createTable('ec_keysets', function(table) {
+      table.string('id').primary();
+      table.decimal('value', 15, 8).notNullable();
+      table.string('currency').notNullable();
+      table.text('description').nullable();
+      table.timestamp('created_at').defaultTo(db.fn.now());
+      table.boolean('is_active').defaultTo(true);
+    });
+    logger.info('Created ec_keysets table');
+  }
+  
+  const hasEcKeysTable = await db.schema.hasTable('ec_keys');
+  if (!hasEcKeysTable) {
+    await db.schema.createTable('ec_keys', function(table) {
+      table.string('id').primary();
+      table.string('keyset_id').notNullable();
+      table.text('public_key').notNullable();
+      table.text('private_key').notNullable();
+      table.timestamp('created_at').defaultTo(db.fn.now());
+      table.timestamp('expires_at').notNullable();
+      table.boolean('is_active').defaultTo(true);
+      table.foreign('keyset_id').references('ec_keysets.id');
+    });
+    logger.info('Created ec_keys table');
+  }
+  
+  // Create ec_redeemed_tokens table
+  const hasEcRedeemedTokensTable = await db.schema.hasTable('ec_redeemed_tokens');
+  if (!hasEcRedeemedTokensTable) {
+    await db.schema.createTable('ec_redeemed_tokens', function(table) {
+      table.string('id').primary(); // Token ID
+      table.string('keyset_id').notNullable(); // Link to which keyset this token has
+      table.string('key_id').notNullable(); // Which specific key signed this token
+      table.timestamp('redeemed_at').defaultTo(db.fn.now());
+      table.index(['key_id']);
+      table.index(['keyset_id']);
+      table.foreign('key_id').references('ec_keys.id');
+      table.foreign('keyset_id').references('ec_keysets.id');
+    });
+    logger.info('Created ec_redeemed_tokens table');
+  }
+  
+  // Create ec_token_stats table
+  const hasEcStatsTable = await db.schema.hasTable('ec_token_stats');
+  if (!hasEcStatsTable) {
+    await db.schema.createTable('ec_token_stats', function(table) {
+      table.string('keyset_id').primary();
+      table.integer('minted_count').defaultTo(0);
+      table.integer('redeemed_count').defaultTo(0);
+      table.timestamp('last_updated').defaultTo(db.fn.now());
+      table.foreign('keyset_id').references('ec_keysets.id');
+    });
+    logger.info('Created ec_token_stats table');
+  }
+  
+  // Create original RSA tables for backward compatibility
   const hasDenominationsTable = await db.schema.hasTable('denominations');
   if (!hasDenominationsTable) {
     await db.schema.createTable('denominations', function(table) {
