@@ -385,6 +385,7 @@ async function createToken(req, res) {
 async function verifyToken(req, res) {
   try {
     const { token } = req.body;
+    let tokenData; // Pre-declare tokenData to avoid redeclaration issues
     
     // Validate input
     if (!token) {
@@ -932,6 +933,7 @@ async function verifyToken(req, res) {
 async function redeemToken(req, res) {
   try {
     const { token } = req.body;
+    let tokenData; // Pre-declare tokenData to avoid redeclaration issues
     
     // Validate input
     if (!token) {
@@ -1096,6 +1098,7 @@ async function redeemToken(req, res) {
 async function remintToken(req, res) {
   try {
     const { token, custom_prefix } = req.body;
+    let tokenData; // Pre-declare tokenData to avoid redeclaration issues
     
     // Validate input
     if (!token) {
@@ -1555,6 +1558,7 @@ async function getOutstandingValue(req, res) {
 async function splitTokenImplementation(req, res) {
   try {
     const { token, redeem_denomination_id, redeem_amount, custom_prefix } = req.body;
+    let tokenData; // Pre-declare tokenData to avoid redeclaration issues
     
     // Validate inputs
     if (!token) {
@@ -2552,7 +2556,7 @@ async function verifyAndAddSingleECToken(tokenString, results, totalValue) {
     }, 'Attempting to decode single EC token for verification');
     
     // Parse individual token
-    const parsed = decodeToken(tokenString);
+    let parsed = decodeToken(tokenString);
     
     // Extract components and verify
     const { data, signature, key_id } = parsed;
@@ -2592,7 +2596,7 @@ async function verifyAndAddECTokenComponents(data, signature, key_id, results, t
   
   try {
     // Parse token data
-    const tokenData = JSON.parse(data);
+    let tokenData = JSON.parse(data);
     
     logger.debug(`Verifying EC token with ID: ${tokenData.id}`);
     
