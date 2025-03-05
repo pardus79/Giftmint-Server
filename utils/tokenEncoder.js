@@ -346,6 +346,25 @@ async function bundleTokens(tokens, customPrefix) {
           logger.warn('Could not decode any tokens with direct approach either');
         } else {
           logger.info(`Successfully decoded ${Object.keys(tokensByKeyId).length} token groups with direct approach`);
+          
+          // Rebuild the tokenV4 structure with our newly decoded tokens
+          tokenV4.t = Object.keys(tokensByKeyId).map(keyId => {
+            return {
+              i: keyId,
+              p: tokensByKeyId[keyId].map(token => ({
+                a: token.amount,
+                s: token.id,
+                c: token.signature
+              }))
+            };
+          });
+          
+          // Log our success in rebuilding the token structure
+          logger.debug({
+            rebuiltGroups: tokenV4.t.length,
+            totalProofs: tokenV4.t.reduce((sum, g) => sum + g.p.length, 0),
+            keyIds: tokenV4.t.map(g => g.i.substring(0, 8))
+          }, 'Rebuilt token structure with directly decoded tokens');
         }
       } catch (err) {
         logger.warn({ error: err }, 'Failed to use direct decoding approach');
