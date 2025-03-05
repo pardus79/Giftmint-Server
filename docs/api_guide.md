@@ -62,7 +62,31 @@ curl -X POST https://your-mint.com/api/v1/token/create \
 
 When using `total_amount`, a `bundle` property is also returned that contains all tokens bundled into a single string for easier sharing. Users can paste the entire bundle string and it will be recognized as multiple tokens.
 
-The bundle format is space-efficient and follows a similar approach to Cashu's token bundling. It uses abbreviated key names and optimized serialization to keep the token size as small as possible for easy sharing.
+The bundle format uses Cashu's CBOR binary encoding approach (V4 style) for maximum space efficiency. Tokens with the same key ID are grouped together, and all fields use single-letter keys to minimize size. The format looks like:
+
+```
+{
+  "t": [                 // Array of token groups by key ID
+    {
+      "i": bytes,        // Key ID as bytes
+      "p": [             // Proofs (tokens) for this key ID
+        {
+          "s": string,   // Secret ID string
+          "c": bytes     // Signature as bytes
+        },
+        ...
+      ]
+    },
+    ...
+  ],
+  "m": string,           // Mint identifier
+  "u": string            // Unit (sat)
+}
+```
+
+The data is serialized using CBOR, then base64-encoded with the prefix `[prefix]B` (the B indicates the CBOR format version). This approach provides the most compact representation possible for sharing tokens.
+
+Note: If the CBOR library is unavailable, the system will fall back to a JSON-based format with similar structure.
 
 ### List Denominations
 
