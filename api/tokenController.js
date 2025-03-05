@@ -252,27 +252,43 @@ async function verifyToken(req, res) {
       });
     }
     
+    console.log(`[verifyToken] Processing token: ${token.substring(0, 20)}... (length: ${token.length})`);
+    
     // Determine if this is a bundle or single token
     let tokens = [];
     let isBundled = false;
     
     try {
-      // Try to unbundle the token (first as standard, then as compact)
+      // Check if token has a custom prefix (e.g., btcpins)
+      const hasCustomPrefix = 
+        token.startsWith('btcpins') || 
+        token.startsWith('GM') || 
+        token.startsWith(config.token.prefix);
+      
+      console.log(`[verifyToken] Token has ${hasCustomPrefix ? 'custom prefix' : 'no prefix'}`);
+      
+      // Try compact format first as it's more likely with custom prefixes
       try {
-        tokens = tokenEncoder.unbundleTokens(token);
+        tokens = compactTokenEncoder.unbundleTokensCompact(token);
         isBundled = true;
-      } catch (standardError) {
-        // Try compact format if standard fails
+        console.log(`[verifyToken] Successfully unbundled as compact format: ${tokens.length} tokens`);
+      } catch (compactError) {
+        console.log(`[verifyToken] Compact unbundling failed: ${compactError.message}`);
+        // If compact unbundling fails, try standard
         try {
-          tokens = compactTokenEncoder.unbundleTokensCompact(token);
+          tokens = tokenEncoder.unbundleTokens(token);
           isBundled = true;
-        } catch (compactError) {
+          console.log(`[verifyToken] Successfully unbundled as standard format: ${tokens.length} tokens`);
+        } catch (standardError) {
+          console.log(`[verifyToken] Standard unbundling failed: ${standardError.message}`);
           // Not a bundle, treat as single token
+          console.log(`[verifyToken] Not a bundle, treating as single token`);
           tokens = [token];
         }
       }
     } catch (error) {
-      // Not a bundle, treat as single token
+      // If all unbundling attempts fail, log the error and treat as single token
+      console.error(`[verifyToken] Error unbundling token: ${error.message}`);
       tokens = [token];
     }
     
@@ -379,27 +395,43 @@ async function redeemToken(req, res) {
       });
     }
     
+    console.log(`[redeemToken] Processing token: ${token.substring(0, 20)}... (length: ${token.length})`);
+    
     // Determine if this is a bundle or single token
     let tokens = [];
     let isBundled = false;
     
     try {
-      // Try to unbundle the token (first as standard, then as compact)
+      // Check if token has a custom prefix (e.g., btcpins)
+      const hasCustomPrefix = 
+        token.startsWith('btcpins') || 
+        token.startsWith('GM') || 
+        token.startsWith(config.token.prefix);
+      
+      console.log(`[redeemToken] Token has ${hasCustomPrefix ? 'custom prefix' : 'no prefix'}`);
+      
+      // Try compact format first as it's more likely with custom prefixes
       try {
-        tokens = tokenEncoder.unbundleTokens(token);
+        tokens = compactTokenEncoder.unbundleTokensCompact(token);
         isBundled = true;
-      } catch (standardError) {
-        // Try compact format if standard fails
+        console.log(`[redeemToken] Successfully unbundled as compact format: ${tokens.length} tokens`);
+      } catch (compactError) {
+        console.log(`[redeemToken] Compact unbundling failed: ${compactError.message}`);
+        // If compact unbundling fails, try standard
         try {
-          tokens = compactTokenEncoder.unbundleTokensCompact(token);
+          tokens = tokenEncoder.unbundleTokens(token);
           isBundled = true;
-        } catch (compactError) {
+          console.log(`[redeemToken] Successfully unbundled as standard format: ${tokens.length} tokens`);
+        } catch (standardError) {
+          console.log(`[redeemToken] Standard unbundling failed: ${standardError.message}`);
           // Not a bundle, treat as single token
+          console.log(`[redeemToken] Not a bundle, treating as single token`);
           tokens = [token];
         }
       }
     } catch (error) {
-      // Not a bundle, treat as single token
+      // If all unbundling attempts fail, log the error and treat as single token
+      console.error(`[redeemToken] Error unbundling token: ${error.message}`);
       tokens = [token];
     }
     
