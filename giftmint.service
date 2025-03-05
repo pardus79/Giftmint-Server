@@ -6,7 +6,7 @@ After=network.target
 Type=simple
 User=ubuntu
 WorkingDirectory=/home/ubuntu/Giftmint-Server
-ExecStart=/usr/bin/node /home/ubuntu/Giftmint-Server/server.js
+ExecStart=/home/ubuntu/.nvm/versions/node/v18.20.7/bin/node /home/ubuntu/Giftmint-Server/server.js
 Restart=on-failure
 # Restart service after 10 seconds if node service crashes
 RestartSec=10
