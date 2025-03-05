@@ -49,28 +49,29 @@ function encodeToken(token) {
  */
 function decodeToken(encodedToken) {
   // Check if token has a recognized prefix
-  const defaultPrefix = `${config.token.prefix}_`;
-  let tokenBase64;
+  // Create a list of prefixes to try (with underscore suffix)
+  const prefixesToTry = [
+    `${config.token.prefix}_`,
+    'GM_',
+    'btcpins_',
+    'giftmint_',
+    'TEST_'
+  ];
   
-  // Try default prefix first
-  if (encodedToken.startsWith(defaultPrefix)) {
-    tokenBase64 = encodedToken.substring(defaultPrefix.length);
-  } else {
-    // Try other common prefixes if the default doesn't match
-    const commonPrefixes = ['GM_', 'btcpins_', 'giftmint_'];
-    let foundPrefix = false;
-    
-    for (const prefix of commonPrefixes) {
-      if (encodedToken.startsWith(prefix)) {
-        tokenBase64 = encodedToken.substring(prefix.length);
-        foundPrefix = true;
-        break;
-      }
+  let tokenBase64;
+  let foundPrefix = false;
+  
+  // Try each prefix
+  for (const prefix of prefixesToTry) {
+    if (encodedToken.startsWith(prefix)) {
+      tokenBase64 = encodedToken.substring(prefix.length);
+      foundPrefix = true;
+      break;
     }
-    
-    if (!foundPrefix) {
-      throw new Error(`Invalid token. Expected recognized prefix`);
-    }
+  }
+  
+  if (!foundPrefix) {
+    throw new Error(`Invalid token. Expected recognized prefix`);
   }
   
   // Decode base64
@@ -179,18 +180,28 @@ function unbundleTokens(bundle) {
     // Remove the prefix if present
     let processedBundle = bundle;
     
-    // Check for the config prefix first
-    if (processedBundle.startsWith(config.token.prefix)) {
-      processedBundle = processedBundle.substring(config.token.prefix.length);
-    } else {
-      // If not the default prefix, iterate through possible common prefixes
-      const commonPrefixes = ['GM', 'btcpins', 'giftmint'];
-      for (const prefix of commonPrefixes) {
-        if (processedBundle.startsWith(prefix)) {
-          processedBundle = processedBundle.substring(prefix.length);
-          break;
-        }
+    // Create a list of prefixes to try
+    const prefixesToTry = [
+      config.token.prefix,
+      'GM',
+      'btcpins', 
+      'giftmint',
+      'TEST'
+    ];
+
+    // Try to remove prefix
+    let foundPrefix = false;
+    for (const prefix of prefixesToTry) {
+      if (processedBundle.startsWith(prefix)) {
+        processedBundle = processedBundle.substring(prefix.length);
+        foundPrefix = true;
+        break;
       }
+    }
+    
+    // If no prefix was found, assume there isn't one
+    if (!foundPrefix) {
+      console.log('[unbundleTokens] No recognized prefix found - assuming raw bundle');
     }
     
     // Decode base64

@@ -77,6 +77,7 @@ function bundleTokensCompact(tokens, customPrefix) {
     
     // Add the token prefix (either custom or from config)
     const prefix = customPrefix || config.token.prefix;
+    console.log(`[compactTokenEncoder] Using prefix: ${prefix} for token bundle`);
     return `${prefix}${encodedBundle}`;
   } catch (error) {
     throw new Error(`Failed to encode compact token bundle: ${error.message}`);
@@ -92,8 +93,30 @@ function unbundleTokensCompact(bundle) {
   try {
     // Remove prefix if present
     let processedBundle = bundle;
-    if (bundle.startsWith(config.token.prefix)) {
-      processedBundle = bundle.substring(config.token.prefix.length);
+    
+    // Create a list of prefixes to try
+    const prefixesToTry = [
+      config.token.prefix,
+      'GM',
+      'btcpins', 
+      'giftmint',
+      'TEST'
+    ];
+
+    // Try to remove prefix
+    let foundPrefix = false;
+    for (const prefix of prefixesToTry) {
+      if (processedBundle.startsWith(prefix)) {
+        processedBundle = processedBundle.substring(prefix.length);
+        console.log(`[compactTokenEncoder] Removed prefix: ${prefix}`);
+        foundPrefix = true;
+        break;
+      }
+    }
+    
+    // If no prefix was found, assume there isn't one
+    if (!foundPrefix) {
+      console.log('[compactTokenEncoder] No recognized prefix found - assuming raw bundle');
     }
     
     // Decode base64url
