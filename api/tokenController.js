@@ -2066,12 +2066,50 @@ async function createECToken(req, res) {
             // Fix the signature conversion - use Buffer.from().toString('hex') instead of toString('hex') directly
             const signatureHex = Buffer.from(signature).toString('hex');
             
-            // Process the signed token
-            const finishedToken = blindSignature.processSignedToken(
-              tokenRequest,
-              signatureHex,
-              tokenKeyPair.publicKey
-            );
+            // Ensure the public key is properly formatted - if it's a comma-separated string from toString(),
+            // convert it to hex format first
+            let publicKeyFormatted = tokenKeyPair.publicKey;
+            if (typeof publicKeyFormatted === 'string' && publicKeyFormatted.includes(',')) {
+              // Convert comma-separated string to hex string
+              try {
+                const pubKeyArray = new Uint8Array(publicKeyFormatted.split(',').map(Number));
+                publicKeyFormatted = Buffer.from(pubKeyArray).toString('hex');
+                logger.debug('Converted comma-separated public key to hex format');
+              } catch (e) {
+                logger.error({ error: e.message }, 'Failed to convert comma-separated public key');
+                throw new Error('Invalid public key format');
+              }
+            }
+            
+            // Log the token parameters before processing
+            logger.debug({
+              tokenRequestId: tokenRequest.id,
+              signatureHexLength: signatureHex.length,
+              signatureHexPrefix: signatureHex.substring(0, 10),
+              publicKeyType: typeof publicKeyFormatted,
+              publicKeyLength: publicKeyFormatted.length,
+              publicKeyPrefix: typeof publicKeyFormatted === 'string' ? 
+                publicKeyFormatted.substring(0, 10) : 'not string',
+              blindingFactorLength: tokenRequest.blindingFactor.length,
+              blindingFactorPrefix: tokenRequest.blindingFactor.substring(0, 10),
+            }, 'Token parameters before processing');
+            
+            // Process the signed token with improved error handling
+            let finishedToken;
+            try {
+              finishedToken = blindSignature.processSignedToken(
+                tokenRequest,
+                signatureHex,
+                publicKeyFormatted
+              );
+            } catch (procError) {
+              logger.error({
+                error: procError.message,
+                stack: procError.stack,
+                tokenRequestId: tokenRequest.id
+              }, 'Error processing signed token');
+              throw new Error(`Failed to process token: ${procError.message}`);
+            }
             
             logger.debug(`Processed signed EC token with ID: ${tokenRequest.id}`);
             

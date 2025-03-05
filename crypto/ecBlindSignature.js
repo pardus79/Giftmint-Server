@@ -621,18 +621,39 @@ function processSignedToken(tokenRequest, blindSignature, publicKey) {
     
     try {
       // Check if publicKey is a valid hex string (should be digits and a-f only)
-      if (typeof publicKey === 'string' && !/^[0-9a-f]+$/i.test(publicKey)) {
-        logger.error({ 
-          publicKey: publicKey.substring(0, 30),
-          isValidHex: /^[0-9a-f]+$/i.test(publicKey)
-        }, 'publicKey is not a valid hex string');
-        throw new Error('publicKey is not a valid hex string');
+      if (typeof publicKey === 'string') {
+        if (/^[0-9a-f]+$/i.test(publicKey)) {
+          // Valid hex string - use directly
+          K = toUint8Array(publicKey, 'hex');
+          logger.debug({ KLength: K.length }, 'Converted publicKey hex to Uint8Array');
+        } else if (publicKey.includes(',')) {
+          // Handle comma-separated string format (toString() artifact)
+          logger.warn('Comma-separated public key detected, attempting to convert');
+          try {
+            K = new Uint8Array(publicKey.split(',').map(Number));
+            logger.debug({ KLength: K.length }, 'Converted comma-separated publicKey to Uint8Array');
+          } catch (e) {
+            logger.error({ error: e.message }, 'Failed to convert comma-separated publicKey');
+            throw new Error('Invalid comma-separated public key');
+          }
+        } else {
+          logger.error({ 
+            publicKey: publicKey.substring(0, 30),
+            isValidHex: /^[0-9a-f]+$/i.test(publicKey),
+            hasCommas: publicKey.includes(',')
+          }, 'publicKey is in an unrecognized format');
+          throw new Error('Unrecognized public key format');
+        }
+      } else if (publicKey instanceof Uint8Array || Buffer.isBuffer(publicKey)) {
+        // Already a binary format
+        K = toUint8Array(publicKey);
+        logger.debug({ KLength: K.length }, 'Converted binary publicKey to Uint8Array');
+      } else {
+        logger.error({ publicKeyType: typeof publicKey }, 'Unsupported public key type');
+        throw new Error('Unsupported public key type');
       }
-      
-      K = toUint8Array(publicKey, 'hex');
-      logger.debug({ KLength: K.length }, 'Converted publicKey to Uint8Array');
     } catch (e) {
-      logger.error({ error: e.message }, 'Failed to convert publicKey to Uint8Array');
+      logger.error({ error: e.message, publicKeyType: typeof publicKey }, 'Failed to convert publicKey to Uint8Array');
       throw new Error('Invalid public key format');
     }
     

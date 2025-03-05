@@ -188,16 +188,24 @@ async function createNewKeyPair(keysetId) {
     // Generate unique key ID
     const keyId = uuidv4();
     
-    // Calculate expiry date (10x longer than RSA keys since EC is faster to create)
+    // Calculate expiry date - ensure proper interval calculation (in seconds)
+    // Default to 24 hours (86400 seconds) if config value is missing or invalid
+    const rotationIntervalSecs = config.crypto && 
+                              config.crypto.keyRotationInterval && 
+                              typeof config.crypto.keyRotationInterval === 'number' ? 
+                              config.crypto.keyRotationInterval : 86400;
+                              
     const expiryDate = new Date();
-    expiryDate.setSeconds(expiryDate.getSeconds() + (config.crypto.keyRotationInterval * 10));
+    expiryDate.setSeconds(expiryDate.getSeconds() + rotationIntervalSecs);
     
-    // Store key in database
+    logger.debug(`New key will expire at ${expiryDate.toISOString()} (${rotationIntervalSecs} seconds from now)`);
+    
+    // Store key in database - ensure proper hex encoding
     await db('ec_keys').insert({
       id: keyId,
       keyset_id: keysetId,
       private_key: privateKey.toString('hex'),
-      public_key: publicKey.toString('hex'),
+      public_key: Buffer.from(publicKey).toString('hex'), // Ensure proper hex encoding
       created_at: new Date(),
       expires_at: expiryDate,
       is_active: true
@@ -216,8 +224,11 @@ async function createNewKeyPair(keysetId) {
  * Schedule key rotation
  */
 function scheduleKeyRotation() {
-  // Calculate interval in milliseconds (half the configured interval)
-  const rotationIntervalMs = (config.crypto.keyRotationInterval * 1000) / 2;
+  // Convert to milliseconds - ensure long enough interval to avoid excessive rotation
+  // The keyRotationInterval is in seconds, so multiply by 1000 to get milliseconds
+  const rotationIntervalMs = config.crypto.keyRotationInterval * 1000;
+  
+  logger.info(`Scheduling next key rotation in ${rotationIntervalMs / 1000} seconds`);
   
   setTimeout(async () => {
     try {
@@ -226,13 +237,14 @@ function scheduleKeyRotation() {
       scheduleKeyRotation();
     } catch (error) {
       logger.error({ error }, 'Failed to rotate EC keys');
-      scheduleKeyRotation();
+      // On error, still reschedule but with a longer delay (60 seconds)
+      setTimeout(() => scheduleKeyRotation(), 60000);
     }
   }, rotationIntervalMs);
 }
 
 /**
- * Rotate keys - create new key pairs for all keysets
+ * Rotate keys - create new key pairs for keysets that need them
  */
 async function rotateKeys() {
   try {
@@ -241,13 +253,36 @@ async function rotateKeys() {
     // Get all active keysets
     const activeKeysets = await db('ec_keysets').where('is_active', true);
     
-    // Create new key pairs for each keyset
+    // Count for rotation summary
+    let keysetsRotated = 0;
+    let keysetsSkipped = 0;
+    
+    // Create new key pairs only for keysets with soon-to-expire keys or no keys
     for (const keyset of activeKeysets) {
-      await createNewKeyPair(keyset.id);
-      // Removed duplicate logging here
+      // Check if there are any active, non-expired keys for this keyset
+      const existingKeys = await db('ec_keys')
+        .where('keyset_id', keyset.id)
+        .where('is_active', true)
+        .where('expires_at', '>', new Date())
+        .orderBy('created_at', 'desc');
+        
+      // Calculate the threshold date for rotation (80% of the way to expiry)
+      const now = new Date();
+      const rotationThreshold = new Date();
+      // Add 20% of the rotation interval to now to get the threshold
+      rotationThreshold.setSeconds(now.getSeconds() + (config.crypto.keyRotationInterval * 0.2));
+      
+      // Only rotate if we have no keys or the newest key is approaching expiry
+      if (existingKeys.length === 0 || new Date(existingKeys[0].expires_at) < rotationThreshold) {
+        await createNewKeyPair(keyset.id);
+        keysetsRotated++;
+      } else {
+        // Skip this keyset, it has a valid key with plenty of time left
+        keysetsSkipped++;
+      }
     }
     
-    logger.info('Rotated EC keys for all keysets');
+    logger.info(`Key rotation complete: ${keysetsRotated} keysets rotated, ${keysetsSkipped} keysets skipped`);
     
     return activeKeysetId;
   } catch (error) {
