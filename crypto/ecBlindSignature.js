@@ -160,21 +160,25 @@ function blindMessage(Y, blindingFactor) {
  */
 function signBlindedMessage(B_, k) {
   try {
+    // Ensure inputs are Uint8Array for secp256k1 compatibility
+    const B_uint8 = B_ instanceof Uint8Array ? B_ : Uint8Array.from(B_);
+    const k_uint8 = k instanceof Uint8Array ? k : Uint8Array.from(k);
+    
     // Ensure B_ is a valid point
-    if (!secp256k1.publicKeyVerify(B_)) {
+    if (!secp256k1.publicKeyVerify(B_uint8)) {
       throw new Error('Invalid blinded message B_');
     }
     
     // Ensure k is a valid scalar
-    if (!secp256k1.privateKeyVerify(k)) {
+    if (!secp256k1.privateKeyVerify(k_uint8)) {
       throw new Error('Invalid private key k');
     }
     
     // Calculate C_ = kB_ (point multiplication)
-    const C_ = secp256k1.publicKeyTweakMul(B_, k);
+    const C_ = secp256k1.publicKeyTweakMul(B_uint8, k_uint8);
     
     logger.debug({
-      B_Prefix: Buffer.from(B_).slice(0, 5).toString('hex'),
+      B_Prefix: Buffer.from(B_uint8).slice(0, 5).toString('hex'),
       C_Prefix: Buffer.from(C_).slice(0, 5).toString('hex')
     }, 'Generated blind signature');
     
