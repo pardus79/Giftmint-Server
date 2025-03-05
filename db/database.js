@@ -344,8 +344,12 @@ async function createTables() {
  */
 async function close() {
   if (db) {
-    await db.destroy();
-    logger.info('Database connection closed');
+    try {
+      await db.destroy();
+      logger.info('Database connection closed');
+    } catch (error) {
+      logger.error(error, 'Error closing database connection');
+    }
   }
 }
 

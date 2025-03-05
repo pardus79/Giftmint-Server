@@ -103,20 +103,30 @@ async function startServer() {
 }
 
 // Handle graceful shutdown
-process.on('SIGTERM', () => {
+process.on('SIGTERM', async () => {
   logger.info('SIGTERM received, shutting down gracefully');
   // Close database and other resources before exiting
-  db.close().then(() => {
+  try {
+    await db.close();
+    logger.info('Successfully closed all connections');
     process.exit(0);
-  });
+  } catch (error) {
+    logger.error(error, 'Error during shutdown');
+    process.exit(1);
+  }
 });
 
-process.on('SIGINT', () => {
+process.on('SIGINT', async () => {
   logger.info('SIGINT received, shutting down gracefully');
   // Close database and other resources before exiting
-  db.close().then(() => {
+  try {
+    await db.close();
+    logger.info('Successfully closed all connections');
     process.exit(0);
-  });
+  } catch (error) {
+    logger.error(error, 'Error during shutdown');
+    process.exit(1);
+  }
 });
 
 // Start server
