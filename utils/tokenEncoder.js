@@ -62,7 +62,7 @@ function encodeToken(token, customPrefix) {
  * @param {string} [customPrefix] - Optional custom prefix to use
  * @returns {string} A bundled token string in CBOR compact format
  */
-function bundleTokens(tokens, customPrefix) {
+async function bundleTokens(tokens, customPrefix) {
   try {
     // Import CBOR - this requires the cbor package to be installed
     // npm install cbor --save
@@ -87,6 +87,36 @@ function bundleTokens(tokens, customPrefix) {
     const groupedByKeyId = {};
     
     // First, extract all tokens and organize them
+    // Map to keep track of denominations by key_id
+    const denominationValues = {};
+    
+    // First extract denomination info for each key_id (if available)
+    try {
+      // Try to get token denominations from the database
+      const { getDb } = require('../db/database');
+      const keyManager = require('../crypto/keyManager');
+      const db = getDb();
+      
+      // Get all active key pairs and their denominations
+      const keypairs = await keyManager.getAllActiveKeyPairs();
+      
+      // Create a map of key_id to denomination value
+      for (const kp of keypairs) {
+        try {
+          const denom = await keyManager.getDenomination(kp.denominationId);
+          if (denom) {
+            denominationValues[kp.id] = denom.value;
+            logger.debug(`Mapped key_id ${kp.id} to denomination value ${denom.value}`);
+          }
+        } catch (e) {
+          logger.warn(`Could not get denomination for key_id ${kp.id}`);
+        }
+      }
+    } catch (dbError) {
+      logger.warn({ error: dbError }, 'Failed to get denomination values - amounts will not be included in CBOR bundle');
+    }
+    
+    // Process each token
     for (const token of tokens) {
       try {
         // Skip the prefix by finding the first base64 character
@@ -127,17 +157,37 @@ function bundleTokens(tokens, customPrefix) {
         
         // For each unique key_id, create an entry with a proofs array
         if (!groupedByKeyId[keyId]) {
+          // Store the key_id as binary using Buffer
+          // This ensures it matches the h'...' format in Cashu spec
+          const keyIdBytes = Buffer.from(keyId, 'utf8');
+          
           groupedByKeyId[keyId] = {
-            i: Buffer.from(keyId, 'utf8'), // key_id as bytes
+            i: keyIdBytes, // key_id as bytes (NOT hex string)
             p: []  // proofs array
           };
         }
         
+        // Create the proof object in Cashu V4 format
+        const proofObj = {
+          s: secretId, // secret id
+          // Convert signature to binary format using Buffer 
+          // This ensures it matches the h'...' format in Cashu spec
+          c: Buffer.from(signature, 'base64') // signature as bytes (NOT base64 string)
+        };
+        
+        // Add amount value if we know it (required by Cashu protocol)
+        if (denominationValues[keyId]) {
+          proofObj.a = denominationValues[keyId]; // Amount in sats
+        } else {
+          // Default to 1 if we don't know the amount
+          // This isn't ideal but better than omitting it entirely for protocol compatibility
+          proofObj.a = 1;
+        }
+        
         // Add the proof to the appropriate key_id group
-        groupedByKeyId[keyId].p.push({
-          s: secretId,                       // secret id as string
-          c: Buffer.from(signature, 'utf8')  // signature as bytes
-        });
+        groupedByKeyId[keyId].p.push(proofObj);
+        
+        logger.debug(`Added token with key_id ${keyId.substring(0, 8)}... and amount ${proofObj.a}`);
       } catch (err) {
         // Skip invalid tokens
         logger.warn({ error: err, token: token.substring(0, 40) + '...' }, 'Failed to decode token for CBOR bundling');

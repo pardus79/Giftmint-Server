@@ -402,6 +402,32 @@ function getActiveKeyId() {
   return activeKeyId;
 }
 
+/**
+ * Get all active key pairs
+ * 
+ * @returns {Promise<Array>} Array of active key pairs
+ */
+async function getAllActiveKeyPairs() {
+  try {
+    const db = getDb();
+    const keys = await db('mint_keys')
+      .where('is_active', true)
+      .where('expires_at', '>', new Date())
+      .orderBy('created_at', 'desc');
+    
+    // Format the response to match other key pair functions
+    return keys.map(key => ({
+      id: key.id,
+      publicKey: key.public_key,
+      privateKey: key.private_key,
+      denominationId: key.denomination_id
+    }));
+  } catch (error) {
+    logger.error(error, 'Failed to get all active key pairs');
+    throw error;
+  }
+}
+
 module.exports = {
   init,
   getActiveKeyPair,
@@ -409,5 +435,6 @@ module.exports = {
   getKeyPairForDenomination,
   getDenomination,
   getActiveKeyId,
-  rotateKeys
+  rotateKeys,
+  getAllActiveKeyPairs
 };

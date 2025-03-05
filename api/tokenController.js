@@ -247,7 +247,7 @@ async function createToken(req, res) {
         
         // Create a bundled token for easier handling
         const { bundleTokens } = require('../utils/tokenEncoder');
-        const bundledToken = bundleTokens(createdTokens, custom_prefix);
+        const bundledToken = await bundleTokens(createdTokens, custom_prefix);
         
         // Return both individual tokens and the bundled version
         return res.status(200).json({
