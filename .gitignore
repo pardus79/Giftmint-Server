@@ -6,6 +6,9 @@ yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
 
+# Claude memory file
+CLAUDE.md
+
 # Dependency directories
 node_modules/
 jspm_packages/
