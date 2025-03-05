@@ -99,69 +99,6 @@ async function bundleTokens(tokens, customPrefix) {
     // First decode all tokens to extract their data for bundling
     const decodedTokens = [];
     for (const token of tokens) {
-      try {
-        logger.debug({
-          tokenPrefix: token.substring(0, 15),
-          tokenLength: token.length
-        }, 'Processing token for bundling');
-        
-        // Skip the prefix by finding the first base64 character
-        let base64Start = -1;
-        for (let i = 0; i < token.length; i++) {
-          const char = token[i];
-          if ((char >= 'A' && char <= 'Z') || 
-              (char >= 'a' && char <= 'z') || 
-              (char >= '0' && char <= '9') ||
-              char === '-' || char === '_') {
-            base64Start = i;
-            break;
-          }
-        }
-        
-        // Skip prefix and get base64 part
-        const base64Token = token.slice(base64Start);
-        
-        // Log debug info
-        logger.debug({
-          base64Start,
-          prefixDetected: token.substring(0, base64Start),
-          base64Prefix: base64Token.substring(0, 15)
-        }, 'Extracted base64 portion of token');
-        
-        // Convert to standard base64
-        let standardBase64 = base64Token
-          .replace(/-/g, '+')
-          .replace(/_/g, '/');
-        
-        // Add padding if needed
-        while (standardBase64.length % 4) {
-          standardBase64 += '=';
-        }
-        
-        // Decode the base64 string
-        const tokenBuffer = Buffer.from(standardBase64, 'base64');
-        const tokenObject = JSON.parse(tokenBuffer.toString());
-        
-        // Parse the data field to get the ID
-        const dataObj = JSON.parse(tokenObject.data);
-        
-        // Add to decoded tokens array
-        decodedTokens.push({
-          id: dataObj.id,                    // Secret ID
-          signature: tokenObject.signature,  // Signature in base64 
-          keyId: tokenObject.key_id,         // Key ID
-          amount: 1                          // Default amount, normally determined by denomination
-        });
-        
-        logger.debug({
-          id: dataObj.id.substring(0, 8),
-          keyId: tokenObject.key_id.substring(0, 8),
-          decodedTokensCount: decodedTokens.length
-        }, 'Successfully decoded token for bundling');
-      } catch (err) {
-        logger.error({ 
-          error: err, 
-          errorMessage: err.message,
           tokenPrefix: token.substring(0, 40)
         }, 'Failed to decode token for CBOR bundling');
       }
@@ -262,15 +199,99 @@ async function bundleTokens(tokens, customPrefix) {
       })
     };
     
-    // If no tokens were successfully decoded, add a fallback token
+    // Debug log the tokens before encoding
+    for (const keyId in tokensByKeyId) {
+      const tokens = tokensByKeyId[keyId];
+      logger.debug({
+        keyId: keyId.substring(0, 8),
+        tokenCount: tokens.length,
+        tokenIds: tokens.map(t => t.id.substring(0, 8))
+      }, `Token group for key ${keyId.substring(0, 8)}`);
+    }
+    
+    // If the tokens couldn't be properly decoded, try one more time with a more direct approach
     if (Object.keys(tokensByKeyId).length === 0 && tokens.length > 0) {
-      logger.warn('No tokens could be properly decoded, adding fallback token');
+      logger.warn('No tokens could be properly decoded, trying direct decoding approach');
+      
+      try {
+        // Direct approach for each token
+        for (const token of tokens) {
+          try {
+            // Find prefix end (look for eyJkYXRh - the base64 beginning of {"data"
+            const prefixEnd = token.indexOf('eyJkYXRh');
+            if (prefixEnd === -1) {
+              logger.warn(`Could not find data marker in token: ${token.substring(0, 20)}...`);
+              continue;
+            }
+            
+            // Extract and process token
+            const base64Token = token.slice(prefixEnd);
+            const standardBase64 = base64Token
+              .replace(/-/g, '+')
+              .replace(/_/g, '/') + 
+              (base64Token.length % 4 === 0 ? '' : 
+               base64Token.length % 4 === 1 ? '===' : 
+               base64Token.length % 4 === 2 ? '==' : 
+               '=');
+            
+            // Decode token
+            const tokenBuffer = Buffer.from(standardBase64, 'base64');
+            const tokenObject = JSON.parse(tokenBuffer.toString());
+            const dataObj = JSON.parse(tokenObject.data);
+            
+            logger.debug({
+              tokenId: dataObj.id.substring(0, 8),
+              keyId: tokenObject.key_id.substring(0, 8)
+            }, 'Successfully decoded token with direct approach');
+            
+            // Store the token by key ID
+            const keyId = tokenObject.key_id;
+            if (!tokensByKeyId[keyId]) {
+              tokensByKeyId[keyId] = [];
+            }
+            
+            tokensByKeyId[keyId].push({
+              id: dataObj.id,
+              signature: tokenObject.signature,
+              keyId: keyId,
+              amount: 1
+            });
+          } catch (tokenErr) {
+            logger.warn({
+              error: tokenErr,
+              tokenPrefix: token.substring(0, 20)
+            }, 'Failed to decode token with direct approach');
+          }
+        }
+        
+        // Add a warning if we still couldn't decode any tokens
+        if (Object.keys(tokensByKeyId).length === 0) {
+          logger.warn('Could not decode any tokens with direct approach either');
+        } else {
+          logger.info(`Successfully decoded ${Object.keys(tokensByKeyId).length} token groups with direct approach`);
+        }
+      } catch (err) {
+        logger.warn({ error: err }, 'Failed to use direct decoding approach');
+      }
+    }
+    
+    // If we still have no tokens, use a fallback token as last resort
+    if (Object.keys(tokensByKeyId).length === 0 && tokens.length > 0) {
+      logger.warn('Using fallback token approach as last resort');
+      
       try {
         // Use first token as fallback
         const firstToken = tokens[0];
-        // Extract base64 part
-        const base64Start = firstToken.indexOf('eyJkYXRh');
+        // Extract base64 part - look for common base64 pattern in token
+        const base64Start = firstToken.search(/[A-Za-z0-9+/=]{10,}/);
         const base64Token = firstToken.slice(base64Start > 0 ? base64Start : 0);
+        
+        logger.debug({
+          tokenPrefix: firstToken.substring(0, 20),
+          base64Start,
+          base64Extract: base64Token.substring(0, 20)
+        }, 'Attempting fallback with first token');
+        
         // Convert to standard base64
         let standardBase64 = base64Token
           .replace(/-/g, '+')
@@ -284,11 +305,11 @@ async function bundleTokens(tokens, customPrefix) {
         
         // Add a single token with this keyset
         tokenV4.t.push({
-          i: Buffer.from(tokenObject.key_id, 'utf8'),
+          i: tokenObject.key_id,
           p: [{
             a: 1, // Default amount
             s: dataObj.id,
-            c: Buffer.from(tokenObject.signature, 'base64')
+            c: tokenObject.signature
           }]
         });
         
@@ -298,11 +319,11 @@ async function bundleTokens(tokens, customPrefix) {
         
         // Last resort - completely dummy data
         tokenV4.t.push({
-          i: Buffer.from("fallback-key-id"),
+          i: "fallback-key-id",
           p: [{
             a: 1,
             s: "fallback-secret-" + Date.now(),
-            c: Buffer.from("fallback-signature")
+            c: "fallback-signature"
           }]
         });
       }
@@ -1054,3 +1075,84 @@ module.exports = {
   bundleTokens,
   unbundleTokens
 };
+      try {
+        logger.debug({
+          tokenPrefix: token.substring(0, 15),
+          tokenLength: token.length
+        }, 'Processing token for bundling');
+        
+        // Properly identify and handle token prefixes
+        const prefix = token.match(/^[a-zA-Z]+/)[0];
+        logger.debug({ detectedPrefix: prefix }, 'Detected token prefix');
+        
+        // Find where the base64 data starts (after the prefix)
+        let base64Start = prefix.length;
+        
+        // Check if there's a marker character like 'B' after the prefix
+        if (token.length > base64Start && 
+            (token[base64Start] === 'B' || 
+             token[base64Start] === 'p' || 
+             token[base64Start] === 'v')) {
+          base64Start++; // Skip the marker character
+          logger.debug({ markerChar: token[prefix.length] }, 'Detected marker character after prefix');
+        }
+        
+        // Extract only the base64 part of the token
+        const base64Token = token.slice(base64Start);
+        
+        // Log debug info
+        logger.debug({
+          base64Start,
+          prefixDetected: token.substring(0, base64Start),
+          base64Prefix: base64Token.substring(0, 15),
+          base64Length: base64Token.length
+        }, 'Extracted base64 portion of token');
+        
+        // Convert to standard base64
+        let standardBase64 = base64Token
+          .replace(/-/g, '+')
+          .replace(/_/g, '/');
+        
+        // Add padding if needed
+        while (standardBase64.length % 4) {
+          standardBase64 += '=';
+        }
+        
+        // Decode the base64 string
+        const tokenBuffer = Buffer.from(standardBase64, 'base64');
+        logger.debug({
+          bufferLength: tokenBuffer.length,
+          bufferStart: tokenBuffer.slice(0, 10).toString('hex')
+        }, 'Decoded base64 to buffer');
+        
+        // Parse JSON
+        const tokenString = tokenBuffer.toString('utf8');
+        logger.debug({
+          tokenStringStart: tokenString.substring(0, 30)
+        }, 'Converted buffer to string');
+        
+        const tokenObject = JSON.parse(tokenString);
+        
+        // Parse the data field to get the ID
+        const dataObj = JSON.parse(tokenObject.data);
+        
+        // Add to decoded tokens array
+        decodedTokens.push({
+          id: dataObj.id,                    // Secret ID
+          signature: tokenObject.signature,  // Signature in base64 
+          keyId: tokenObject.key_id,         // Key ID
+          amount: 1                          // Default amount, normally determined by denomination
+        });
+        
+        logger.debug({
+          tokenId: dataObj.id.substring(0, 8),
+          keyId: tokenObject.key_id.substring(0, 8),
+          decodedTokensCount: decodedTokens.length
+        }, 'Successfully decoded token for bundling');
+      } catch (err) {
+        logger.error({ 
+          error: err, 
+          errorMessage: err.message,
+          tokenPrefix: token.substring(0, 40) + '...'
+        }, 'Failed to decode token for CBOR bundling');
+      }
