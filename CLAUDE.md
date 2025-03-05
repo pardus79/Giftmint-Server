@@ -51,12 +51,67 @@ npm run lint      # Lint code
 4. Custom token prefixes are supported throughout the codebase
 5. Legacy functions in tokenController.js have been updated to use EC methods internally
 
+## Recent Fixes (as of March 2025)
+
+1. **Public Key Handling**:
+   - Fixed public key formatting issues with proper hex encoding
+   - Added support for comma-separated public key formats
+   - Enhanced public key conversion between string and Buffer/Uint8Array
+
+2. **Key Rotation**:
+   - Fixed setTimeout overflow issues with large rotation intervals
+   - Improved key rotation scheduling to prevent excessive key creation
+   - Added proper cleanup of timer references to prevent memory leaks
+   - Implemented smarter rotation that only rotates keys nearing expiration
+
+3. **Token Bundling & CBOR Format**:
+   - Fixed CBOR decoding to properly handle optimized binary format tokens
+   - Added robust handling of binary data in token ID and signature fields
+   - Enhanced error handling for token verification with multiple fallbacks
+   - Improved compatibility between the compact CBOR encoding and token verification
+   - Added diagnostic endpoints for troubleshooting token issues:
+     - `/api/diagnostic/verify-token` - Test individual token verification
+     - `/api/diagnostic/unbundle` - Diagnose bundle format issues
+     - `/api/diagnostic/token-detail` - Detailed token analysis and format detection
+
+4. **Type Conversion & Binary Data**:
+   - Added comprehensive Uint8Array/Buffer conversion utilities
+   - Fixed data type mismatches between Node.js Buffer and secp256k1 Uint8Array
+   - Implemented proper normalization of binary IDs for database lookups
+   - Enhanced binary data handling throughout the verification pipeline
+   - Added format detection and automatic conversion between types
+
 ## Codebase-Specific Considerations
 
 1. When making changes to cryptographic implementation, ensure the domain separator remains `Giftmint_`
 2. TokenEncoder.js handles both individual tokens and bundles with prefix support
 3. API endpoints are available under both `/token/` and `/ec/token/` paths for compatibility
 4. Aliased function names exist in the controller for backward compatibility
+
+## Troubleshooting Common Issues
+
+1. **Token Creation Issues**:
+   - Check ecKeyManager.js for key creation and rotation
+   - Ensure public keys are properly formatted as hex strings
+   - Verify data type consistency (Buffer vs Uint8Array)
+
+2. **Token Verification Problems**:
+   - For bundle issues, try verifying individual tokens first
+   - Use `/api/diagnostic/token-detail` to identify token format and structure
+   - For CBOR format issues, inspect binary data formats in logs
+   - Check if token IDs are binary or string format and ensure proper handling
+   - When in doubt, create and use individual tokens instead of bundles
+
+3. **CBOR Format Compatibility**:
+   - Binary IDs in CBOR tokens should now be properly handled
+   - If verification still fails, check secret ID and signature formats in logs
+   - Ensure CBOR token bundles are created with the correct options
+   - Use token-detail endpoint to confirm proper token structure
+
+4. **Key Rotation Errors**:
+   - Look for excessive key creation in logs
+   - Verify key expiration calculation
+   - Check for timer overflow errors with long durations
 
 ## Security Notes
 

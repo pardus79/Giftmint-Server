@@ -1233,8 +1233,21 @@ function unbundleTokens(bundleString) {
                             continue;
                           }
                           
+                          // Normalize secretId for consistent format
+                          let normalizedSecretId = secretId;
+                          if (typeof secretId === 'string' && secretId.includes(',')) {
+                            try {
+                              // Convert comma-separated values to hex string for consistency
+                              const numArray = secretId.split(',').map(Number);
+                              normalizedSecretId = Buffer.from(numArray).toString('hex');
+                              logger.debug(`Converted comma-separated secret ID to hex: ${normalizedSecretId.substring(0, 16)}...`);
+                            } catch (e) {
+                              logger.warn({error: e}, 'Failed to convert comma-separated secret ID to hex, using original');
+                            }
+                          }
+                          
                           // Create token in our format
-                          const tokenData = JSON.stringify({ id: secretId });
+                          const tokenData = JSON.stringify({ id: normalizedSecretId });
                           const fullToken = {
                             data: tokenData,
                             signature: signature,

@@ -13,6 +13,26 @@ const ecKeyManager = require('../crypto/ecKeyManager');
 const blindSignature = require('../crypto/ecBlindSignature'); // Using EC implementation only
 const { encodeToken, decodeToken } = require('../utils/tokenEncoder');
 
+/**
+ * Normalize token ID from any format (Buffer, Uint8Array, string) to consistent string format
+ * Used for database lookups and comparison
+ * 
+ * @param {Buffer|Uint8Array|string} id - The token ID in any format
+ * @returns {string} Normalized string representation of the ID
+ */
+function normalizeTokenId(id) {
+  if (Buffer.isBuffer(id)) {
+    return id.toString('hex');
+  } else if (id instanceof Uint8Array) {
+    return Buffer.from(id).toString('hex');
+  } else if (typeof id === 'string') {
+    return id;
+  } else {
+    // Fallback for any other type
+    return String(id);
+  }
+}
+
 // Initialize logger directly without importing from server to avoid circular dependencies
 const logger = pino({
   level: config.log.level,
@@ -1011,27 +1031,15 @@ async function verifyToken(req, res) {
               const db = getDb();
               let tokenDbId;
               
-              // Normalize the token ID for database lookup
-              if (Buffer.isBuffer(tokenData.id) || tokenData.id instanceof Uint8Array) {
-                // Convert binary ID to hex string for database
-                tokenDbId = Buffer.isBuffer(tokenData.id) ? 
-                  tokenData.id.toString('hex') : 
-                  Buffer.from(tokenData.id).toString('hex');
-                  
-                logger.debug({
-                  usingBinaryId: true,
-                  normalizedIdLength: tokenDbId.length,
-                  normalizedIdPrefix: tokenDbId.substring(0, 16)
-                }, 'Normalized binary ID for database');
-              } else {
-                // String ID, use directly
-                tokenDbId = tokenData.id;
-                logger.debug({
-                  usingStringId: true,
-                  idLength: tokenDbId.length,
-                  idPrefix: tokenDbId.substring(0, 16)
-                }, 'Using string ID for database');
-              }
+              // Normalize the token ID for database lookup using common utility
+              tokenDbId = normalizeTokenId(tokenData.id);
+              logger.debug({
+                originalIdType: typeof tokenData.id,
+                isBuffer: Buffer.isBuffer(tokenData.id),
+                isUint8Array: tokenData.id instanceof Uint8Array,
+                normalizedIdLength: tokenDbId.length,
+                normalizedIdPrefix: tokenDbId.substring(0, 16)
+              }, 'Normalized token ID for database lookup');
               
               // Query using normalized ID
               const redeemedToken = await db('ec_redeemed_tokens')
@@ -3828,7 +3836,21 @@ async function verifyIndividualTokenEndpoint(req, res) {
         const keyset = await ecKeyManager.getKeyset(keyPair.keysetId);
         
         // Verify the signature using EC verification
-        const secret = tokenData.id;
+        let secret = tokenData.id;
+        
+        // Normalize secret if it's a comma-separated string (from binary data toString())
+        if (typeof secret === 'string' && secret.includes(',')) {
+          try {
+            // Convert comma-separated values to buffer for verification
+            const numArray = secret.split(',').map(Number);
+            secret = Buffer.from(numArray);
+            logger.debug('Converted comma-separated ID to Buffer for verification');
+          } catch (e) {
+            logger.warn({error: e}, 'Failed to convert comma-separated ID');
+            // Continue with original secret
+          }
+        }
+        
         const signatureBuffer = Buffer.from(signature, 'hex');
         const privateKeyBuffer = Buffer.from(keyPair.privateKey, 'hex');
         
