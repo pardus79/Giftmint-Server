@@ -49,9 +49,18 @@ curl -X POST https://your-mint.com/api/v1/token/create \
   "tokens": [
     "token_string_1",
     "token_string_2"
-  ]
+  ],
+  "bundle": "btcpinsbundle-eyJ2IjoxLCJ0b2tlbnMiOlsidG9rZW5fc3RyaW5nXzEiLCJ0b2tlbl9zdHJpbmdfMiJdLCJjb3VudCI6MiwiY3JlYXRlZCI6MTUwMDAwMDAwMDAwMH0",
+  "denomination_info": [
+    {"id": "123", "value": 128, "currency": "SATS", "description": "128 Satoshis"},
+    {"id": "456", "value": 64, "currency": "SATS", "description": "64 Satoshis"}
+  ],
+  "total_amount": 1000,
+  "token_count": 2
 }
 ```
+
+When using `total_amount`, a `bundle` property is also returned that contains all tokens bundled into a single string for easier sharing. Users can paste the entire bundle string and it will be recognized as multiple tokens.
 
 ### List Denominations
 

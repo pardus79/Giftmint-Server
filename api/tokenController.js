@@ -245,10 +245,15 @@ async function createToken(req, res) {
         
         await trx.commit();
         
-        // Return all tokens
+        // Create a bundled token for easier handling
+        const { bundleTokens } = require('../utils/tokenEncoder');
+        const bundledToken = bundleTokens(createdTokens, custom_prefix);
+        
+        // Return both individual tokens and the bundled version
         return res.status(200).json({
           success: true,
           tokens: createdTokens,
+          bundle: bundledToken,
           denomination_info: denominationInfo,
           total_amount: parseInt(total_amount, 10),
           token_count: createdTokens.length

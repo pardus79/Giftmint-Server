@@ -9,6 +9,7 @@ const tokenController = require('./tokenController');
 
 // Denomination routes
 router.post('/denomination/list', asyncHandler(tokenController.listDenominations));
+router.get('/token/denominations', asyncHandler(tokenController.listDenominations));
 
 // Token routes
 router.post('/token/create', asyncHandler(tokenController.createToken));
