@@ -18,6 +18,7 @@ router.post('/token/redeem', asyncHandler(tokenController.redeemECToken));
 
 // Diagnostic endpoints
 router.post('/diagnostic/verify-token', asyncHandler(tokenController.verifyIndividualTokenEndpoint));
+router.post('/diagnostic/unbundle', asyncHandler(tokenController.unbundleTokenEndpoint));
 
 // Also available under /ec endpoint for compatibility with existing documentation
 router.post('/ec/token/create', asyncHandler(tokenController.createECToken));

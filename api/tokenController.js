@@ -3028,6 +3028,158 @@ const getOutstandingECValue = getOutstandingValue;
 const getActiveKeysets = listDenominations;
 
 /**
+ * Direct endpoint for debugging token bundle unbundling
+ * 
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
+async function unbundleTokenEndpoint(req, res) {
+  try {
+    const { token } = req.body;
+    
+    if (!token) {
+      return res.status(400).json({
+        success: false,
+        message: 'Token bundle is required'
+      });
+    }
+    
+    logger.debug({
+      tokenType: typeof token,
+      tokenLength: token.length,
+      tokenPrefix: token.substring(0, Math.min(20, token.length))
+    }, 'Attempting to unbundle token manually');
+    
+    try {
+      // Import the encoder utility directly
+      const { unbundleTokens } = require('../utils/tokenEncoder');
+      
+      // Try different approaches to unbundle
+      
+      // 1. First, try to manually process the token format
+      let processedToken = token;
+      let prefix = '';
+      
+      // Extract the prefix if present
+      const prefixMatch = token.match(/^[a-zA-Z]+/);
+      if (prefixMatch) {
+        prefix = prefixMatch[0];
+        logger.debug({ prefix }, 'Found token prefix');
+        
+        // Check for 'B' marker after prefix
+        const markerIndex = prefix.length;
+        if (token.length > markerIndex && token[markerIndex] === 'B') {
+          // This is a CBOR bundle with B marker
+          logger.debug('Found CBOR marker B after prefix');
+          
+          // Extract the base64 part (skip prefix and B marker)
+          const base64Bundle = token.substring(markerIndex + 1);
+          
+          // Convert to standard base64
+          let standardBase64 = base64Bundle
+            .replace(/-/g, '+')
+            .replace(/_/g, '/');
+          
+          // Add padding if needed
+          while (standardBase64.length % 4) {
+            standardBase64 += '=';
+          }
+          
+          // Try to decode directly as Buffer
+          try {
+            const bundleBuffer = Buffer.from(standardBase64, 'base64');
+            
+            // Log hex representation for debugging
+            const hexDump = bundleBuffer.slice(0, 32).toString('hex').match(/.{1,2}/g).join(' ');
+            logger.debug({ hexDump, bufferLength: bundleBuffer.length }, 'Bundle buffer hex dump');
+            
+            // Load CBOR decoder
+            const cbor = require('cbor');
+            
+            try {
+              // Try with custom options (lax parsing)
+              const decoded = cbor.decodeAllSync(bundleBuffer);
+              
+              return res.status(200).json({
+                success: true,
+                message: 'Successfully unbundled token with manual CBOR decoding',
+                unbundled_tokens: decoded,
+                original_token: {
+                  prefix,
+                  bundle_type: 'CBOR',
+                  token_length: token.length,
+                  base64_length: base64Bundle.length
+                }
+              });
+            } catch (cborError) {
+              logger.error({ error: cborError }, 'CBOR decoding failed in manual approach');
+              
+              // Try a fallback approach by treating the token bytes as individual tokens
+              return res.status(200).json({
+                success: false,
+                message: 'Failed to unbundle with CBOR, but processed token format',
+                error: cborError.message,
+                original_token: {
+                  prefix,
+                  bundle_type: 'CBOR (failed parsing)',
+                  hex_sample: hexDump,
+                  token_length: token.length
+                },
+                raw_bundle_buffer: Array.from(bundleBuffer.slice(0, 100))
+              });
+            }
+          } catch (bufferError) {
+            logger.error({ error: bufferError }, 'Failed to create buffer from base64');
+            
+            return res.status(400).json({
+              success: false,
+              message: 'Failed to decode base64 bundle',
+              error: bufferError.message
+            });
+          }
+        }
+      }
+      
+      // 2. If we made it here, try the regular unbundle function
+      try {
+        const unbundled = unbundleTokens(token);
+        
+        return res.status(200).json({
+          success: true,
+          message: 'Successfully unbundled token with standard function',
+          unbundled_result: unbundled,
+          token_count: unbundled.t ? unbundled.t.length : 0
+        });
+      } catch (standardError) {
+        logger.error({ error: standardError }, 'Standard unbundling failed');
+        
+        return res.status(400).json({
+          success: false,
+          message: 'Failed to unbundle with standard method',
+          error: standardError.message
+        });
+      }
+    } catch (error) {
+      logger.error({ error }, 'Unbundling diagnostics failed');
+      
+      return res.status(500).json({
+        success: false,
+        message: 'Token unbundling diagnostic error',
+        error: error.message
+      });
+    }
+  } catch (error) {
+    logger.error({ error }, 'Token unbundling endpoint error');
+    
+    return res.status(500).json({
+      success: false,
+      message: 'Token unbundling endpoint error',
+      error: error.message
+    });
+  }
+}
+
+/**
  * Direct endpoint for troubleshooting individual token verification
  * 
  * @param {Object} req - Express request object
@@ -3179,5 +3331,6 @@ module.exports = {
   bulkCreateTokens,
   
   // Diagnostic endpoints
-  verifyIndividualTokenEndpoint
+  verifyIndividualTokenEndpoint,
+  unbundleTokenEndpoint
 };
