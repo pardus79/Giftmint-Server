@@ -60,8 +60,145 @@ async function listDenominations(req, res) {
  */
 async function createToken(req, res) {
   try {
-    const { denomination_id, denomination_value, custom_prefix, batch_id } = req.body;
+    const { denomination_id, denomination_value, custom_prefix, batch_id, total_amount, currency } = req.body;
+    const db = getDb();
     
+    // Handle arbitrary amount using combination of denominations
+    if (total_amount) {
+      // Get all available denominations for the requested currency
+      const availableDenoms = await db('denominations')
+        .where('is_active', true)
+        .orderBy('value', 'desc');
+        
+      if (availableDenoms.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'No active denominations available'
+        });
+      }
+      
+      // Import the change maker utility
+      const changeMaker = require('../utils/changeMaker');
+      
+      // Calculate tokens needed
+      let tokenDenominations;
+      try {
+        // For power of 2 denominations, use binary change maker for optimal results
+        tokenDenominations = changeMaker.makeChangeBinary(parseInt(total_amount, 10), availableDenoms);
+      } catch (error) {
+        return res.status(400).json({
+          success: false,
+          message: `Cannot make exact change for ${total_amount}`
+        });
+      }
+      
+      // Create multiple tokens
+      const createdTokens = [];
+      const denominationInfo = [];
+      
+      // Use a transaction
+      const trx = await db.transaction();
+      
+      try {
+        for (const denom of tokenDenominations) {
+          // Get key pair for this denomination
+          const tokenKeyPair = await keyManager.getKeyPairForDenomination(denom.id);
+          
+          // Create token request
+          const tokenRequest = blindSignature.createTokenRequest(
+            tokenKeyPair.denominationId,
+            tokenKeyPair.publicKey
+          );
+          
+          // Sign the blinded token
+          const blindedTokenBuffer = Buffer.from(tokenRequest.blindedToken, 'base64');
+          const signature = blindSignature.signBlindedMessage(blindedTokenBuffer, tokenKeyPair.privateKey);
+          
+          // Process the signed token
+          if (!tokenRequest.hashAlgo) {
+            tokenRequest.hashAlgo = 'sha256';
+          }
+          
+          const finishedToken = blindSignature.processSignedToken(
+            tokenRequest,
+            signature.toString('base64'),
+            tokenKeyPair.publicKey
+          );
+          
+          // Update token stats
+          await trx('token_stats')
+            .where('denomination_id', tokenKeyPair.denominationId)
+            .increment('minted_count', 1)
+            .update('last_updated', trx.fn.now())
+            .catch(async () => {
+              await trx('token_stats').insert({
+                denomination_id: tokenKeyPair.denominationId,
+                minted_count: 1,
+                redeemed_count: 0,
+                last_updated: trx.fn.now()
+              });
+            });
+          
+          // Create token object
+          const tokenObject = {
+            data: finishedToken.data,
+            signature: finishedToken.signature,
+            key_id: tokenKeyPair.id
+          };
+          
+          // Create token format
+          const compactToken = encodeToken(tokenObject, custom_prefix);
+          
+          createdTokens.push(compactToken);
+          denominationInfo.push({
+            id: denom.id,
+            value: denom.value,
+            currency: denom.currency,
+            description: denom.description
+          });
+        }
+        
+        // Update batch stats if a batch_id was provided
+        if (batch_id) {
+          // Check if the batch exists
+          const batch = await trx('batch_stats')
+            .where('batch_id', batch_id)
+            .first();
+          
+          if (batch) {
+            await trx('batch_stats')
+              .where('batch_id', batch_id)
+              .increment('total_value', parseInt(total_amount, 10))
+              .update('last_updated', trx.fn.now());
+          } else {
+            await trx('batch_stats').insert({
+              batch_id,
+              currency: currency || denominationInfo[0].currency,
+              total_value: parseInt(total_amount, 10),
+              redeemed_value: 0,
+              created_at: trx.fn.now(),
+              last_updated: trx.fn.now()
+            });
+          }
+        }
+        
+        await trx.commit();
+        
+        // Return all tokens
+        return res.status(200).json({
+          success: true,
+          tokens: createdTokens,
+          denomination_info: denominationInfo,
+          total_amount: parseInt(total_amount, 10),
+          token_count: createdTokens.length
+        });
+      } catch (error) {
+        await trx.rollback();
+        throw error;
+      }
+    }
+    
+    // Handle single denomination token (original functionality)
     let keyPair;
     let denomination;
     
@@ -91,7 +228,6 @@ async function createToken(req, res) {
     const signature = blindSignature.signBlindedMessage(blindedTokenBuffer, keyPair.privateKey);
     
     // Update aggregate token stats for this denomination
-    const db = getDb();
     try {
       // Try to increment existing stats
       const updated = await db('token_stats')
@@ -701,26 +837,15 @@ async function remintToken(req, res) {
 }
 
 /**
- * Split a token (temporary implementation - will be updated)
+ * Split a token
  * 
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
 async function splitToken(req, res) {
-  try {
-    // Return a 501 Not Implemented
-    res.status(501).json({
-      success: false,
-      message: 'Split token functionality is being updated for the privacy-preserving design'
-    });
-  } catch (error) {
-    logger.error({ error }, 'Failed to split token');
-    res.status(500).json({
-      success: false,
-      message: 'Failed to split token',
-      error: error.message
-    });
-  }
+  // This function is now implemented with the full version below.
+  // This placeholder remains for function order.
+  return splitTokenImplementation(req, res);
 }
 
 /**
@@ -960,7 +1085,7 @@ async function getOutstandingValue(req, res) {
 }
 
 /**
- * Split a token
+ * Split a token - Implementation
  * 
  * This function takes a token of one denomination and splits it into multiple tokens of smaller denominations.
  * It's the Chaumian e-cash version of making change.
@@ -968,7 +1093,7 @@ async function getOutstandingValue(req, res) {
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
-async function splitToken(req, res) {
+async function splitTokenImplementation(req, res) {
   try {
     const { token, redeem_denomination_id, redeem_amount, custom_prefix } = req.body;
     
@@ -1114,12 +1239,12 @@ async function splitToken(req, res) {
     const trx = await db.transaction();
     
     try {
-      // Check if token has been redeemed
-      const storedToken = await trx('tokens')
+      // Check if token has been redeemed - use redeemed_tokens table
+      const redeemedToken = await trx('redeemed_tokens')
         .where('id', tokenData.id)
         .first();
       
-      if (storedToken && storedToken.status === 'redeemed') {
+      if (redeemedToken) {
         await trx.rollback();
         return res.status(400).json({
           success: false,
@@ -1127,29 +1252,13 @@ async function splitToken(req, res) {
         });
       }
       
-      // If token isn't in the database yet, add it
-      if (!storedToken) {
-        await trx('tokens').insert({
-          id: tokenData.id,
-          denomination_id: keyPair.denominationId,
-          key_id: key_id,
-          blinded_token: '',
-          signed_token: signature,
-          status: 'pending',
-          created_at: new Date(),
-          updated_at: new Date(),
-          expires_at: new Date(Date.now() + config.crypto.tokenExpiry * 1000)
-        });
-      }
-      
-      // Mark original token as redeemed
-      await trx('tokens')
-        .where('id', tokenData.id)
-        .update({
-          status: 'redeemed',
-          redeemed_at: new Date(),
-          updated_at: new Date()
-        });
+      // Mark original token as redeemed - add to redeemed_tokens
+      await trx('redeemed_tokens').insert({
+        id: tokenData.id,
+        denomination_id: keyPair.denominationId,
+        key_id: key_id,
+        redeemed_at: new Date()
+      });
       
       // Create split redemption record
       const [splitId] = await trx('split_redemptions')
@@ -1347,6 +1456,7 @@ module.exports = {
   redeemToken,
   remintToken,
   splitToken,
+  splitTokenImplementation, // Add implementation for testing
   bulkCreateTokens,
   getOutstandingValue,
   getOutstandingByDenomination
