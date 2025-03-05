@@ -8,6 +8,11 @@ Giftmint Server is a private e-cash system for generating gift certificates. It 
 **DO NOT INSTALL OR RUN THIS PROJECT ON THIS MACHINE.**  
 This is a development environment for code review only. The actual testing and deployment happens on another machine. Do not attempt to install dependencies, run the server, or execute npm commands.
 
+**Git Workflow Notes:**
+- When making changes, use `git commit` to save changes locally
+- Do NOT use `git push` - the commits will be manually pushed to the remote repository
+- Code changes should be tested on the separate testing environment before pushing
+
 ## Key Components
 
 - **Cryptography**: Uses EC-based blind signatures (ecBlindSignature.js, ecKeyManager.js)

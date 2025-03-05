@@ -848,7 +848,6 @@ async function verifyToken(req, res) {
     }
     
     // Parse token data
-    let tokenData;
     try {
       tokenData = JSON.parse(data);
     } catch (e) {
@@ -865,7 +864,7 @@ async function verifyToken(req, res) {
     const denomination = await keyManager.getDenomination(keyPair.denominationId);
     
     // Parse token data to get the secret
-    const tokenData = JSON.parse(data);
+    // Already parsed tokenData above
     const secret = tokenData.id;
     
     // Verify signature using EC implementation
@@ -972,7 +971,6 @@ async function redeemToken(req, res) {
     
     // Parse token data
     let tokenData;
-    try {
       tokenData = JSON.parse(data);
     } catch (e) {
       return res.status(400).json({
@@ -988,7 +986,7 @@ async function redeemToken(req, res) {
     const denomination = await keyManager.getDenomination(keyPair.denominationId);
     
     // Parse token data to get the secret
-    const tokenData = JSON.parse(data);
+    // Already parsed tokenData above
     const secret = tokenData.id;
     
     // Verify signature using EC implementation
@@ -1154,7 +1152,6 @@ async function remintToken(req, res) {
     // Parse token data
     let tokenData;
     try {
-      tokenData = JSON.parse(data);
     } catch (e) {
       return res.status(400).json({
         success: false,
@@ -1181,7 +1178,7 @@ async function remintToken(req, res) {
     }
     
     // Parse token data to get the secret
-    const tokenData = JSON.parse(data);
+    // Already parsed tokenData above
     const secret = tokenData.id;
     
     // Verify signature using EC implementation
@@ -1606,7 +1603,6 @@ async function splitTokenImplementation(req, res) {
     let tokenData;
     try {
       tokenData = JSON.parse(data);
-    } catch (e) {
       return res.status(400).json({
         success: false,
         message: 'Invalid token data'
@@ -2458,7 +2454,6 @@ async function verifyECToken(req, res) {
     try {
       tokenData = JSON.parse(data);
     } catch (e) {
-      return res.status(400).json({
         success: false,
         message: 'Invalid EC token data'
       });
@@ -2763,7 +2758,6 @@ async function redeemECToken(req, res) {
       tokenData = JSON.parse(data);
     } catch (e) {
       return res.status(400).json({
-        success: false,
         message: 'Invalid EC token data'
       });
     }
