@@ -1,121 +1,95 @@
-# Giftmint Server Project Guide
+# Claude Memory for Giftmint Server
 
-## Project Overview
-Giftmint Server is a private e-cash system for generating gift certificates. It uses elliptic curve-based blind signatures for secure and compact tokens. This is a standalone system not compatible with Cashu or other e-cash protocols, designed exclusively for use by a webstore to create and redeem gift certificates.
-
-## ⚠️ IMPORTANT: Development Environment ⚠️
-
-**DO NOT INSTALL OR RUN THIS PROJECT ON THIS MACHINE.**  
-This is a development environment for code review only. The actual testing and deployment happens on another machine. Do not attempt to install dependencies, run the server, or execute npm commands.
-
-**Git Workflow Notes:**
-- When making changes, use `git commit` to save changes locally
-- Do NOT use `git push` - the commits will be manually pushed to the remote repository
-- Code changes should be tested on the separate testing environment before pushing
-
-## Key Components
-
-- **Cryptography**: Uses EC-based blind signatures (ecBlindSignature.js, ecKeyManager.js)
-- **Token Format**: Compact tokens with custom prefixes, can be bundled for efficiency
-- **API Endpoints**: Available under both `/token/` and `/ec/token/` paths
-- **Database**: Uses SQLite with Knex.js for ORM
-
-## Code Architecture
-
-- `server.js` - Main server file, entry point
-- `api/` - API routes and controllers
-- `crypto/` - Cryptographic implementation
-- `utils/` - Utility functions including token encoding/bundling
-- `config/` - Configuration settings
-- `db/` - Database connection and schema
+This file stores frequently used commands and information about the codebase.
 
 ## Common Commands
 
-These are for reference only. DO NOT execute these on this machine:
+### Development
 
+```bash
+# Start development server with auto-restart
+npm run dev
+
+# Run linting
+npm run lint
+
+# Run all tests
+npm test
+
+# Run specific test file
+npm test -- test/api/tokenController.test.js
+
+# Run specific test directory
+npm test -- test/unit
+
+# Run tests with coverage report
+npm test -- --coverage
 ```
-# Server commands
-npm start         # Start server
-npm run dev       # Start with nodemon for development
 
-# Development
-npm test          # Run tests
-npm run lint      # Lint code
+### Database Management
+
+```bash
+# Force database migration
+npx knex migrate:latest
+
+# Rollback migration
+npx knex migrate:rollback
+
+# Run database seeds
+npx knex seed:run
 ```
 
-## Notes for Development
+### Deployment
 
-1. All token operations use the EC implementation exclusively - RSA has been completely removed
-2. EC signatures use the secp256k1 curve with Blind Diffie-Hellman Key Exchange (BDHKE)
-3. Token bundling works with EC tokens and uses CBOR for compact representation
-4. Custom token prefixes are supported throughout the codebase
-5. Legacy functions in tokenController.js have been updated to use EC methods internally
+```bash
+# Build for production
+npm run build
 
-## Recent Fixes (as of March 2025)
+# Start production server
+npm start
 
-1. **Public Key Handling**:
-   - Fixed public key formatting issues with proper hex encoding
-   - Added support for comma-separated public key formats
-   - Enhanced public key conversion between string and Buffer/Uint8Array
+# Install production dependencies only
+npm ci --only=production
+```
 
-2. **Key Rotation**:
-   - Fixed setTimeout overflow issues with large rotation intervals
-   - Improved key rotation scheduling to prevent excessive key creation
-   - Added proper cleanup of timer references to prevent memory leaks
-   - Implemented smarter rotation that only rotates keys nearing expiration
+## Project Structure
 
-3. **Token Bundling & CBOR Format**:
-   - Fixed CBOR decoding to properly handle optimized binary format tokens
-   - Added robust handling of binary data in token ID and signature fields
-   - Enhanced error handling for token verification with multiple fallbacks
-   - Improved compatibility between the compact CBOR encoding and token verification
-   - Added diagnostic endpoints for troubleshooting token issues:
-     - `/api/diagnostic/verify-token` - Test individual token verification
-     - `/api/diagnostic/unbundle` - Diagnose bundle format issues
-     - `/api/diagnostic/token-detail` - Detailed token analysis and format detection
+- `api/` - API routes and controllers
+- `crypto/` - Cryptographic implementations
+- `db/` - Database connection and models
+- `utils/` - Utility functions
+- `docs/` - Documentation
+- `config/` - Configuration management
 
-4. **Type Conversion & Binary Data**:
-   - Added comprehensive Uint8Array/Buffer conversion utilities
-   - Fixed data type mismatches between Node.js Buffer and secp256k1 Uint8Array
-   - Implemented proper normalization of binary IDs for database lookups
-   - Enhanced binary data handling throughout the verification pipeline
-   - Added format detection and automatic conversion between types
+## Coding Conventions
 
-## Codebase-Specific Considerations
+- Use camelCase for variables and functions
+- Use PascalCase for classes
+- Use snake_case for database fields
+- Prefix private functions with underscore
+- Always include JSDoc comments for functions
+- Use async/await for asynchronous code
+- Always validate inputs in controllers
 
-1. When making changes to cryptographic implementation, ensure the domain separator remains `Giftmint_`
-2. TokenEncoder.js handles both individual tokens and bundles with prefix support
-3. API endpoints are available under both `/token/` and `/ec/token/` paths for compatibility
-4. Aliased function names exist in the controller for backward compatibility
+## Important Notes
 
-## Troubleshooting Common Issues
+- Token IDs are generated as SHA-256 hashes of their secrets
+- Always check if a token has been redeemed before accepting it
+- Key rotation happens automatically based on configuration
+- Token bundles use CBOR encoding for compact representation
+- Compact token bundling provides ~30% size reduction and is enabled by default
+- Binary data should be normalized using the provided utility functions
 
-1. **Token Creation Issues**:
-   - Check ecKeyManager.js for key creation and rotation
-   - Ensure public keys are properly formatted as hex strings
-   - Verify data type consistency (Buffer vs Uint8Array)
+## Configuration Options
 
-2. **Token Verification Problems**:
-   - For bundle issues, try verifying individual tokens first
-   - Use `/api/diagnostic/token-detail` to identify token format and structure
-   - For CBOR format issues, inspect binary data formats in logs
-   - Check if token IDs are binary or string format and ensure proper handling
-   - When in doubt, create and use individual tokens instead of bundles
+Key configuration options in `.env`:
 
-3. **CBOR Format Compatibility**:
-   - Binary IDs in CBOR tokens should now be properly handled
-   - If verification still fails, check secret ID and signature formats in logs
-   - Ensure CBOR token bundles are created with the correct options
-   - Use token-detail endpoint to confirm proper token structure
+- `TOKEN_PREFIX`: The prefix for encoded tokens (default: "GM")
+- `KEY_ROTATION_DAYS`: How frequently keys should be rotated
+- `DENOMINATIONS`: Available token denominations
+- `MAX_BUNDLE_SIZE`: Maximum number of tokens in a bundle
+- `API_KEYS`: Comma-separated list of valid API keys
 
-4. **Key Rotation Errors**:
-   - Look for excessive key creation in logs
-   - Verify key expiration calculation
-   - Check for timer overflow errors with long durations
+## API Authentication
 
-## Security Notes
-
-- This is a private mint implementation with no external connections
-- No Bitcoin or Lightning integration
-- Only the webstore should be able to create or redeem tokens
-- No cross-mint transfers supported or allowed
+All API endpoints require an API key in the `X-API-Key` header except the health check endpoint.

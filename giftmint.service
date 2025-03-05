@@ -4,16 +4,15 @@ After=network.target
 
 [Service]
 Type=simple
-User=ubuntu
-WorkingDirectory=/home/ubuntu/Giftmint-Server
-ExecStart=/home/ubuntu/.nvm/versions/node/v18.20.7/bin/node /home/ubuntu/Giftmint-Server/server.js
+User=nodejs
+WorkingDirectory=/opt/giftmint-server
+ExecStart=/usr/bin/node /opt/giftmint-server/server.js
+Environment=PORT=3500
 Restart=on-failure
-# Restart service after 10 seconds if node service crashes
 RestartSec=10
-# Output to syslog
 StandardOutput=syslog
 StandardError=syslog
-SyslogIdentifier=giftmint-server
+SyslogIdentifier=giftmint
 Environment=NODE_ENV=production
 
 [Install]

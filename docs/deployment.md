@@ -1,107 +1,359 @@
-# Deployment Guide
+# Giftmint Server Deployment Guide
 
-## Automated Startup with systemd
+This document outlines the steps to deploy the Giftmint Server in different environments.
 
-The repository includes a systemd service file (`giftmint.service`) to automatically start the server on system boot.
+## Prerequisites
 
-### Installation
+- Node.js v18.0.0 or later
+- npm v8.0.0 or later
+- SQLite3
+- A server or hosting environment (Linux recommended)
 
-1. Copy the service file to systemd directory:
-```bash
-sudo cp /home/ubuntu/Giftmint-Server/giftmint.service /etc/systemd/system/
-```
+## Local Development Deployment
 
-2. Reload systemd to recognize the new service:
-```bash
-sudo systemctl daemon-reload
-```
+1. **Clone the repository**
 
-3. Enable the service to start on boot:
-```bash
-sudo systemctl enable giftmint.service
-```
+   ```bash
+   git clone https://github.com/yourusername/giftmint-server.git
+   cd giftmint-server
+   ```
 
-4. Start the service:
-```bash
-sudo systemctl start giftmint.service
-```
+2. **Install dependencies**
 
-5. Check the status:
-```bash
-sudo systemctl status giftmint.service
-```
+   ```bash
+   npm install
+   ```
 
-### Troubleshooting
+3. **Create environment file**
 
-#### Node.js Path Issues
+   Copy the example environment file and modify it:
 
-If you see an error like:
-```
-Failed to locate executable /usr/bin/node: No such file or directory
-Failed at step EXEC spawning /usr/bin/node: No such file or directory
-```
+   ```bash
+   cp .env.example .env
+   ```
 
-This means the Node.js executable is not where the service file expects it. Common locations include:
+   Edit the `.env` file to set appropriate values for your development environment.
 
-1. NVM installations: `/home/username/.nvm/versions/node/vX.X.X/bin/node`
-2. System-wide: `/usr/bin/node` or `/usr/local/bin/node`
-3. Node.js binaries: `/opt/nodejs/bin/node`
+4. **Run the server**
 
-To fix this:
+   ```bash
+   npm run dev
+   ```
 
-1. Find your Node.js location:
-```bash
-which node
-```
+   The server will start at http://localhost:3000 (or the port specified in your `.env` file).
 
-2. Edit the service file:
-```bash
-sudo nano /etc/systemd/system/giftmint.service
-```
+## Production Deployment
 
-3. Update the `ExecStart` line with your Node.js path:
-```
-ExecStart=/path/to/your/node /home/ubuntu/Giftmint-Server/server.js
-```
+### Standard Server Deployment
 
-4. Reload and restart:
-```bash
-sudo systemctl daemon-reload
-sudo systemctl restart giftmint.service
-```
+1. **Set up the server**
 
-#### Database Connection Issues
+   Make sure your server has Node.js and npm installed:
 
-If the server starts but fails with database errors:
+   ```bash
+   # For Ubuntu/Debian
+   curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+   sudo apt-get install -y nodejs
+   ```
 
-1. Check logs:
-```bash
-sudo journalctl -u giftmint.service
-```
+2. **Clone or upload the application**
 
-2. Verify database configurations in `.env` or config files
-3. Ensure database service is running
-4. Check connection pool settings in `db/database.js`
+   ```bash
+   git clone https://github.com/yourusername/giftmint-server.git
+   cd giftmint-server
+   ```
 
-#### Environment Variables
+3. **Install dependencies**
 
-The systemd service uses `NODE_ENV=production` by default. If you need additional environment variables:
+   ```bash
+   npm ci
+   ```
 
-1. Edit the service file and add under the `[Service]` section:
-```
-Environment=NODE_ENV=production
-Environment=DB_TYPE=sqlite
-Environment=PORT=3500
-# Add more as needed
-```
+4. **Create environment file**
 
-2. Alternatively, create a separate environment file:
-```
-EnvironmentFile=/home/ubuntu/Giftmint-Server/.env
-```
+   ```bash
+   cp .env.example .env
+   ```
 
-3. Reload and restart after changes:
-```bash
-sudo systemctl daemon-reload
-sudo systemctl restart giftmint.service
-```
+   Edit the `.env` file with production values:
+   
+   ```
+   NODE_ENV=production
+   PORT=3000
+   
+   # Use strong API keys in production
+   API_KEYS=your-production-api-key-1,your-production-api-key-2
+   
+   # Set your domain for CORS
+   CORS_ORIGINS=https://yourdomain.com
+   
+   # Key storage should be in a secured directory
+   KEY_STORAGE_PATH=/var/lib/giftmint/keys
+   
+   # Database path
+   DB_PATH=/var/lib/giftmint/giftmint.sqlite
+   ```
+
+5. **Create the key and database directories**
+
+   ```bash
+   sudo mkdir -p /var/lib/giftmint/keys
+   sudo chown -R nodejs:nodejs /var/lib/giftmint
+   ```
+
+6. **Set up the service**
+
+   Create a systemd service file:
+
+   ```bash
+   sudo nano /etc/systemd/system/giftmint.service
+   ```
+
+   Add the following content:
+
+   ```
+   [Unit]
+   Description=Giftmint Server
+   After=network.target
+   
+   [Service]
+   Type=simple
+   User=nodejs
+   WorkingDirectory=/path/to/giftmint-server
+   ExecStart=/usr/bin/node /path/to/giftmint-server/server.js
+   Restart=on-failure
+   Environment=NODE_ENV=production
+   
+   [Install]
+   WantedBy=multi-user.target
+   ```
+
+   Replace `/path/to/giftmint-server` with the actual path.
+
+7. **Start the service**
+
+   ```bash
+   sudo systemctl enable giftmint
+   sudo systemctl start giftmint
+   ```
+
+8. **Set up a reverse proxy (optional but recommended)**
+
+   Using Nginx:
+
+   ```bash
+   sudo apt install nginx
+   sudo nano /etc/nginx/sites-available/giftmint
+   ```
+
+   Add the following configuration:
+
+   ```
+   server {
+       listen 80;
+       server_name api.yourdomain.com;
+   
+       location / {
+           proxy_pass http://localhost:3000;
+           proxy_http_version 1.1;
+           proxy_set_header Upgrade $http_upgrade;
+           proxy_set_header Connection 'upgrade';
+           proxy_set_header Host $host;
+           proxy_cache_bypass $http_upgrade;
+       }
+   }
+   ```
+
+   Enable the site:
+
+   ```bash
+   sudo ln -s /etc/nginx/sites-available/giftmint /etc/nginx/sites-enabled/
+   sudo nginx -t
+   sudo systemctl restart nginx
+   ```
+
+9. **Set up SSL with Let's Encrypt**
+
+   ```bash
+   sudo apt install certbot python3-certbot-nginx
+   sudo certbot --nginx -d api.yourdomain.com
+   ```
+
+### Docker Deployment
+
+You can also deploy using Docker:
+
+1. **Create a Dockerfile**
+
+   ```
+   FROM node:18-alpine
+   
+   WORKDIR /app
+   
+   COPY package*.json ./
+   
+   RUN npm ci --only=production
+   
+   COPY . .
+   
+   # Create directories for persistent data
+   RUN mkdir -p /data/keys
+   
+   ENV NODE_ENV=production
+   ENV KEY_STORAGE_PATH=/data/keys
+   ENV DB_PATH=/data/giftmint.sqlite
+   
+   EXPOSE 3000
+   
+   CMD ["node", "server.js"]
+   ```
+
+2. **Build the Docker image**
+
+   ```bash
+   docker build -t giftmint-server .
+   ```
+
+3. **Run the container**
+
+   ```bash
+   docker run -d \
+     -p 3000:3000 \
+     -v giftmint-data:/data \
+     --name giftmint \
+     --restart unless-stopped \
+     -e NODE_ENV=production \
+     -e PORT=3000 \
+     -e API_KEYS=your-api-key-1,your-api-key-2 \
+     -e CORS_ORIGINS=https://yourdomain.com \
+     giftmint-server
+   ```
+
+## Security Considerations
+
+1. **API Keys**
+   - Use strong, randomly generated API keys
+   - Rotate keys periodically
+   - Use different keys for different clients
+   
+2. **HTTPS**
+   - Always use HTTPS in production
+   - Set proper SSL protocols and ciphers
+   
+3. **File Permissions**
+   - Secure the key storage directory
+   - Set tight permissions on the database file
+   
+4. **Network Security**
+   - Use a firewall to restrict access
+   - Consider IP allowlisting for admin endpoints
+   
+5. **Rate Limiting**
+   - Adjust rate limiting settings based on expected traffic
+
+## Backup and Recovery
+
+1. **Database Backup**
+   
+   Set up automatic backups of the SQLite database:
+
+   ```bash
+   # Example backup script
+   mkdir -p /var/backups/giftmint
+   cp /var/lib/giftmint/giftmint.sqlite /var/backups/giftmint/giftmint_$(date +%Y%m%d).sqlite
+   ```
+
+2. **Key Backup**
+   
+   Backup the key files:
+
+   ```bash
+   # Example backup script
+   tar -czf /var/backups/giftmint/keys_$(date +%Y%m%d).tar.gz /var/lib/giftmint/keys
+   ```
+
+3. **Set up a cron job for automated backups**
+
+   ```bash
+   crontab -e
+   ```
+
+   Add:
+
+   ```
+   0 1 * * * /path/to/backup/script.sh
+   ```
+
+## Monitoring
+
+1. **Log Monitoring**
+   
+   Use a tool like PM2 for basic monitoring:
+
+   ```bash
+   npm install -g pm2
+   pm2 start server.js --name giftmint
+   ```
+
+2. **Performance Monitoring**
+   
+   Set up an APM tool like New Relic or Datadog.
+
+3. **Health Checks**
+   
+   The API has a health endpoint that you can use for monitoring:
+
+   ```
+   GET /api/v1/health
+   ```
+
+   This endpoint does not require authentication.
+
+## Updating the Server
+
+1. **Pull the latest code**
+
+   ```bash
+   cd /path/to/giftmint-server
+   git pull
+   ```
+
+2. **Install any new dependencies**
+
+   ```bash
+   npm ci
+   ```
+
+3. **Restart the service**
+
+   ```bash
+   sudo systemctl restart giftmint
+   ```
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Server won't start**
+   - Check the logs: `journalctl -u giftmint.service`
+   - Verify the .env file exists and has correct values
+   
+2. **Database errors**
+   - Check file permissions on the database file
+   - Ensure the directory exists and is writable
+   
+3. **Key generation failures**
+   - Check permissions on the key storage directory
+   - Ensure the directory exists and is writable
+   
+4. **API key issues**
+   - Verify the API keys in the .env file
+   - Check that the client is passing the key correctly in the X-API-Key header
+
+### Getting Help
+
+If you encounter problems that aren't covered here, please:
+
+1. Check the GitHub repository issues section
+2. Create a new issue with detailed information about your problem
+3. Include logs and error messages (with sensitive information redacted)

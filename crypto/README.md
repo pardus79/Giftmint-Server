@@ -1,60 +1,77 @@
-# Giftmint Cryptographic Implementation
+# Giftmint Cryptography Module
 
-This directory contains the cryptographic implementation used by the Giftmint e-cash server for generating gift certificates.
+This module implements the cryptographic primitives needed for the Giftmint token system. It's based on the principles of blind signatures and implements Blind Diffie-Hellman Key Exchange (BDHKE) using the secp256k1 elliptic curve.
 
-## Elliptic Curve Blind Signatures
+## Key Components
 
-The Giftmint server uses elliptic curve blind signatures for secure gift certificate creation:
+### `ecKeyManager.js`
 
-- Uses `ecKeyManager.js` and `ecBlindSignature.js`
-- Based on the Blind Diffie-Hellman Key Exchange (BDHKE) protocol
-- Uses the secp256k1 curve
-- Provides compact tokens with strong security properties
-- Accessible via the `/token/...` API endpoints
+This module handles EC key pair generation, management, and rotation:
 
-## Private Mint Implementation
+- Generates keys for signing tokens
+- Handles key rotation based on a configurable schedule
+- Maintains a database of active and expired keys
+- Implements backup storage for keys
+- Provides methods to access keys by ID
 
-This is a private e-cash implementation exclusively for gift certificates in our webstore:
+### `ecBlindSignature.js`
 
-- **No external mint compatibility**: This implementation is NOT compatible with Cashu or other e-cash protocols
-- **Closed system**: Only our webstore can create and redeem tokens
-- **No external connections**: Not connected to Bitcoin or Lightning networks
-- **Private use only**: Not designed for interoperability with other systems
+Implements the blind signature cryptography:
 
-## Advantages of EC Implementation
+- `blind(secret, pubKey)`: Blinds a secret value using the signer's public key
+- `sign(blindedMessage, privKey)`: Signs a blinded message with the signer's private key
+- `unblind(blindSignature, blindingFactor, pubKey)`: Unblinds the signature
+- `verify(secret, unblindedSignature, pubKey)`: Verifies an unblinded signature
 
-The implementation offers several advantages for gift certificate operations:
+## Cryptographic Workflow
 
-- **Compact token size**: EC-based tokens are significantly compact
-- **Fast signature generation**: EC operations are computationally efficient
-- **Modern cryptography**: Uses elliptic curve cryptography with strong security properties
-- **Lower QR code complexity**: Shorter tokens mean simpler QR codes that are easier to scan
+The BDHKE-based protocol works as follows:
 
-## Implementation Details
+1. **Key Generation**:
+   - The mint generates a key pair (sk, pk) where sk is the private key and pk is the public key
+   - The public key pk is made available to clients
 
-The implementation uses the secp256k1 elliptic curve and follows a Blind Diffie-Hellman Key Exchange (BDHKE) protocol:
+2. **Token Creation (Blinding)**:
+   - Client generates a random secret s
+   - Client generates a random blinding factor r
+   - Client creates a blinded message: m = Hash(s) || (r·G) (where G is the generator point)
+   - Client sends the blinded message m to the mint
 
-1. The client generates a random secret and maps it to a point Y on the curve
-2. The client generates a random blinding factor and computes a blinded message B_ = Y + rG
-3. The server signs the blinded message with its private key k to get C_ = kB_
-4. The client unblinds the signature by computing C = C_ - rK (where K is the server's public key)
-5. The resulting token consists of the secret and the signature C
+3. **Signing (by Mint)**:
+   - Mint signs the blinded message with its private key: σ' = Sign(sk, Hash(m))
+   - Mint returns the blind signature σ' to the client
 
-This provides excellent security properties with compact tokens, especially useful for gift certificates that need to be displayed in a limited space.
+4. **Unblinding**:
+   - Client unblinds the signature using its blinding factor: σ = Unblind(σ', r)
+   - The resulting token consists of (s, σ)
 
-## Database Tables
+5. **Verification**:
+   - Anyone with the mint's public key can verify the signature: Verify(pk, Hash(s), σ)
+   - If valid, the token is authentic and can be redeemed
 
-The implementation uses these database tables:
+## Security Considerations
 
-- `ec_keysets`: Stores the different denominations for gift certificate values
-- `ec_keys`: Stores the private and public keys used for signing
-- `ec_token_stats`: Tracks token minting and redemption statistics
-- `ec_redeemed_tokens`: Records which tokens have been redeemed to prevent double-spending
+- **Key Management**: Private keys are stored securely and rotated regularly
+- **Blinding**: Ensures that the mint cannot link the signing request to the final token
+- **Verification**: Prevents double-spending by tracking redeemed tokens in the database
+- **Randomness**: Uses cryptographically secure random number generation
+- **Standards Compliance**: Uses industry-standard secp256k1 curve
 
-## API Endpoints
+## Dependencies
 
-The implementation is accessible via these API endpoints:
+- Node.js Crypto module
+- secp256k1 library
 
-- `/token/create`: Create new gift certificate tokens
-- `/token/verify`: Verify gift certificate tokens
-- `/token/redeem`: Redeem gift certificate tokens
+## Key Rotation and Expiry
+
+Keys are automatically rotated based on the configuration settings:
+- `keyRotationDays`: How frequently new keys are created
+- `keyRetentionDays`: How long expired keys are kept for verification purposes
+
+## Error Handling
+
+The module includes comprehensive error handling for:
+- Invalid keys
+- Expired keys
+- Malformed signatures
+- Failed verification

@@ -1,413 +1,158 @@
-# Giftmint Mint Server
-
-A Chaumian e-cash mint for the [Giftmint WordPress plugin](https://github.com/pardus79/Giftmint) that allows store owners to issue and redeem gift certificates.
-
-Repository: https://github.com/pardus79/Giftmint-Server
-
-## Overview
-
-The Giftmint Mint Server is a standalone server that implements Chaumian e-cash for use in gift certificates. It provides an API for creating, verifying, redeeming, and reminting tokens.
-
-## Features
-
-- **Token Creation**: Create new e-cash tokens with specified amounts and currencies
-- **Token Verification**: Verify the authenticity and value of tokens
-- **Token Redemption**: Redeem tokens (partially or fully) and get change tokens if needed
-- **Token Reminting**: Replace tokens with new ones for enhanced security
-- **Compact Tokens**: Uses elliptic curve blind signatures for creating compact gift certificate tokens
-- **Key Rotation**: Automatic key rotation to enhance security
-- **Database Storage**: Stores tokens and redemption records in a database
-- **API Key Authentication**: Secures the API with key-based authentication
-
-## Installation
-
-1. Clone the repository
-2. Install dependencies:
-   ```
-   npm install
-   ```
-3. Copy the example environment file:
-   ```
-   cp .env.example .env
-   ```
-4. Edit the `.env` file with your configuration
-5. Start the server:
-   ```
-   npm start
-   ```
-
-## Configuration
-
-Configure the server by editing the `.env` file:
-
-- **Server**: Port and host settings
-- **Database**: Choose between SQLite, MySQL, or PostgreSQL
-- **API Keys**: Set comma-separated API keys for authentication
-- **Rate Limiting**: Configure request limits
-- **Token Settings**: Configure token expiry, key rotation intervals, and default token prefix
-- **Logging**: Set log level and file path
-
-## Setup with Caddy Server
-
-### 1. Generate API Key
-
-Generate a secure API key using this command:
-
-```bash
-openssl rand -base64 32
-```
-
-Copy the generated key for use in your `.env` file.
-
-### 2. Configure Mint Server
-
-Create and edit your `.env` file:
-
-```bash
-cd mint_server
-cp .env.example .env
-nano .env
-```
-
-Update the following settings:
-```
-# Server settings - bind only to localhost for security
-HOST=127.0.0.1
-PORT=3500
-
-# Add your generated API key
-API_KEYS=your_generated_api_key
-
-# Database and other settings as needed
-DB_TYPE=sqlite
-DB_FILE=./db/giftmint.db
-
-# Custom token prefix (optional)
-TOKEN_PREFIX=giftmint
-```
-
-### 3. Install and Configure Caddy
-
-If Caddy is not installed:
-
-```bash
-# For Debian/Ubuntu
-sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
-sudo apt update
-sudo apt install caddy
-```
-
-Create a Caddyfile:
-
-```bash
-sudo nano /etc/caddy/Caddyfile
-```
-
-Add this configuration (replace `mint.yourdomain.com` with your actual domain):
-
-```
-mint.yourdomain.com {
-    # Configure TLS with your email for certificate notifications
-    tls your-email@example.com
-
-    reverse_proxy localhost:3500
-
-    # Optional: Add security headers
-    header {
-        # Enable HTTP Strict Transport Security (HSTS)
-        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
-        # Disable FLoC tracking
-        Permissions-Policy "interest-cohort=()"
-        # Prevent MIME-type sniffing
-        X-Content-Type-Options "nosniff"
-        # Prevent clickjacking
-        X-Frame-Options "DENY"
-        # Enable XSS filtering
-        X-XSS-Protection "1; mode=block"
-        # Disable browser caching of sensitive data
-        Cache-Control "no-store, no-cache, must-revalidate"
-    }
-
-    # Optional: Limit max request size
-    request_body {
-        max_size 1MB
-    }
-}
-```
-
-Apply the configuration:
-
-```bash
-sudo systemctl reload caddy
-```
-
-### 4. Configure Firewall
-
-If using UFW (Ubuntu's firewall):
-
-```bash
-# Allow Caddy's ports
-sudo ufw allow 80/tcp
-sudo ufw allow 443/tcp
-
-# Make sure the mint server port is NOT exposed externally
-sudo ufw deny 3500/tcp
-```
-
-## API Endpoints
-
-### Create Token
-- **URL**: `/api/v1/token/create`
-- **Method**: `POST`
-- **Body**:
-  ```json
-  {
-    "amount": 100,
-    "currency": "USD",
-    "batch_id": "optional-batch-id",
-    "custom_prefix": "optional-store-prefix"
-  }
-  ```
-- **Response**:
-  ```json
-  {
-    "success": true,
-    "token": "storeprefixABC123...", 
-    "token_raw": "{\"data\":\"...\",\"signature\":\"...\",\"key_id\":\"...\"}"
-  }
-  ```
-
-### Verify Token
-- **URL**: `/api/v1/token/verify`
-- **Method**: `POST`
-- **Body**:
-  ```json
-  {
-    "token": "serialized-token-string"
-  }
-  ```
-- **Response**:
-  ```json
-  {
-    "success": true,
-    "amount": "100",
-    "currency": "USD",
-    "value": "100"
-  }
-  ```
-
-### Redeem Token
-- **URL**: `/api/v1/token/redeem`
-- **Method**: `POST`
-- **Body**:
-  ```json
-  {
-    "token": "serialized-token-string",
-    "amount": 50  // Optional for partial redemptions
-  }
-  ```
-- **Response**:
-  ```json
-  {
-    "success": true,
-    "amount": "50",
-    "currency": "USD",
-    "change_token": "serialized-change-token-string", // Only for partial redemptions
-    "change_amount": "50" // Only for partial redemptions
-  }
-  ```
-
-### Remint Token
-- **URL**: `/api/v1/token/remint`
-- **Method**: `POST`
-- **Body**:
-  ```json
-  {
-    "token": "serialized-token-string",
-    "custom_prefix": "optional-store-prefix"
-  }
-  ```
-- **Response**:
-  ```json
-  {
-    "success": true,
-    "new_token": "storeprefixABC123...",
-    "new_token_raw": "{\"data\":\"...\",\"signature\":\"...\",\"key_id\":\"...\"}",
-    "amount": "100",
-    "currency": "USD"
-  }
-  ```
-  
-### Split Token
-- **URL**: `/api/v1/token/split`
-- **Method**: `POST`
-- **Body**:
-  ```json
-  {
-    "token": "serialized-token-string",
-    "redeem_amount": 512, 
-    "custom_prefix": "optional-store-prefix"
-  }
-  ```
-- **Response**:
-  ```json
-  {
-    "success": true,
-    "original_token_id": "token-id",
-    "original_value": 1024,
-    "redeemed": {
-      "denomination_id": "denom-id",
-      "value": 512,
-      "currency": "SATS",
-      "description": "512 Satoshis"
-    },
-    "change_tokens": ["storeprefixABC123...", "storeprefixDEF456..."],
-    "change_info": [
-      {"denomination_id": "denom-id", "value": 256, "currency": "SATS", "description": "256 Satoshis"},
-      {"denomination_id": "denom-id", "value": 256, "currency": "SATS", "description": "256 Satoshis"}
-    ],
-    "total_change_value": 512
-  }
-  ```
-
-### Bulk Create Tokens
-- **URL**: `/api/v1/token/bulk-create`
-- **Method**: `POST`
-- **Body**:
-  ```json
-  {
-    "amount": 50,
-    "currency": "USD",
-    "quantity": 10,
-    "batch_id": "optional-batch-id",
-    "custom_prefix": "optional-store-prefix"
-  }
-  ```
-- **Response**:
-  ```json
-  {
-    "success": true,
-    "tokens": ["token1", "token2", ...],
-    "batch_id": "batch-id",
-    "amount": 50,
-    "currency": "USD",
-    "quantity": 10
-  }
-  ```
-
-### Get Outstanding Value
-- **URL**: `/api/v1/stats/outstanding`
-- **Method**: `POST`
-- **Body**:
-  ```json
-  {
-    "batch_id": "optional-batch-id",
-    "currency": "optional-currency"
-  }
-  ```
-- **Response**:
-  ```json
-  {
-    "success": true,
-    "value": 1000,
-    "batch_id": "batch-id",
-    "currency": "USD"
-  }
-  ```
-
-## Security Considerations
-
-- Keep your API keys secure
-- Run the server behind HTTPS
-- Regularly rotate keys (handled automatically by default)
-- Consider using a reverse proxy like Nginx for additional security
-- Back up your database regularly
-
-## License
-
-This project is licensed under the Unlicense - see the LICENSE file for details.
+# Giftmint Server
 
-## Compact Token API Endpoints
+A private e-cash server system using elliptic curve-based blind signatures.
 
-These endpoints provide more compact tokens using elliptic curve cryptography.
+## Overview
 
-### Create EC Token
-- **URL**: `/api/v1/ec/token/create`
-- **Method**: `POST`
-- **Body**:
-  ```json
-  {
-    "total_amount": 100,
-    "currency": "USD",
-    "batch_id": "optional-batch-id",
-    "custom_prefix": "optional-store-prefix"
-  }
-  ```
-- **Response**:
-  ```json
-  {
-    "success": true,
-    "token": "storeprefixABC123...", 
-    "token_raw": "{\"data\":\"...\",\"signature\":\"...\",\"key_id\":\"...\"}",
-    "token_type": "ec",
-    "keyset": {
-      "id": "keyset-id",
-      "value": 100,
-      "currency": "USD",
-      "description": "100 USD"
-    }
-  }
-  ```
+Giftmint is a server system that enables the creation, verification, and redemption of cryptographically-secure digital tokens. The system uses elliptic curve-based blind signatures (similar to Cashu v4) to create secure and compact tokens.
 
-### Verify EC Token
-- **URL**: `/api/v1/ec/token/verify`
-- **Method**: `POST`
-- **Body**:
-  ```json
-  {
-    "token": "serialized-token-string"
-  }
-  ```
-- **Response**:
-  ```json
-  {
-    "success": true,
-    "valid": true,
-    "token_id": "token-id",
-    "token_type": "ec",
-    "keyset": {
-      "id": "keyset-id",
-      "value": 100,
-      "currency": "USD",
-      "description": "100 USD"
-    }
-  }
-  ```
+Key features:
+- EC-based blind signatures using the secp256k1 curve
+- Secure token creation and verification
+- Support for token bundling with CBOR format
+- Robust error handling for various token formats
+- API endpoints for token creation, verification, and redemption
+- SQLite database for tracking redeemed tokens
+- Support for key rotation and management
+- Currency agnostic with power-of-2 denominations
 
-### Redeem EC Token
-- **URL**: `/api/v1/ec/token/redeem`
-- **Method**: `POST`
-- **Body**:
-  ```json
-  {
-    "token": "serialized-token-string"
-  }
-  ```
-- **Response**:
-  ```json
-  {
-    "success": true,
-    "token_id": "token-id",
-    "token_type": "ec",
-    "keyset": {
-      "id": "keyset-id",
-      "value": 100,
-      "currency": "USD",
-      "description": "100 USD"
-    },
-    "status": "redeemed"
-  }
-  ```
+## Requirements
 
+- Node.js 18.0.0 or later
+- npm 8.0.0 or later
+- SQLite3
+
+## Installation
+
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/yourusername/giftmint-server.git
+   cd giftmint-server
+   ```
+
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
+
+3. Set up environment:
+   ```bash
+   cp .env.example .env
+   ```
+   
+   Edit the `.env` file with your desired configuration.
+
+4. Start the server:
+   ```bash
+   npm start
+   ```
+
+For development with auto-reload:
+```bash
+npm run dev
+```
+
+## Architecture
+
+The Giftmint Server has the following components:
+
+- **API Layer**: Express.js REST API endpoints
+- **Cryptography**: Blind signature implementation
+- **Database**: SQLite with Knex.js ORM
+- **Token Handling**: Token encoding, bundling, and verification
+- **Key Management**: Key generation, rotation, and storage
+
+## API Endpoints
+
+### Token Creation
+
+- `POST /api/v1/token/create`: Create a single token
+- `POST /api/v1/token/bulk-create`: Create multiple tokens
+
+### Token Verification
+
+- `POST /api/v1/token/verify`: Verify token(s)
+
+### Token Redemption
+
+- `POST /api/v1/token/redeem`: Redeem token(s)
+- `POST /api/v1/token/remint`: Exchange tokens without redemption
+- `POST /api/v1/token/split`: Split token into smaller denominations
+
+### Administrative
+
+- `GET /api/v1/denomination/list`: List available denominations
+- `GET /api/v1/stats/outstanding`: Get outstanding token value
+
+### Diagnostic Endpoints
+
+- `POST /api/v1/diagnostic/verify-token`: Detailed token verification
+- `POST /api/v1/diagnostic/unbundle`: Analyze token bundle structure
+- `POST /api/v1/diagnostic/token-detail`: Detailed token format analysis
+
+## Authentication
+
+API endpoints are protected with API key authentication. Add your API key to the request headers:
+
+```
+X-API-Key: your-api-key
+```
+
+API keys are defined in the `.env` file.
+
+## Configuration
+
+See the `.env.example` file for available configuration options. Key settings include:
+
+- `PORT`: Server port (default: 3500)
+- `API_KEYS`: Comma-separated list of valid API keys
+- `KEY_ROTATION_DAYS`: How frequently keys should be rotated
+- `TOKEN_PREFIX`: Prefix for tokens (default: GM)
+
+## Denominations
+
+Giftmint uses power-of-2 denominations (1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576) to represent any value efficiently. These denominations go up to the next power of 2 beyond 1,000,000 (which is 2^20 = 1,048,576).
+
+When creating or spending tokens, the system uses a greedy approach, always using the largest possible denominations first. Any positive integer value can be represented as a combination of these power-of-2 units (following the binary number system). This approach is currency agnostic, allowing the tokens to work with any underlying value system.
+
+## Documentation
+
+- [API Guide](docs/api_guide.md): Detailed API documentation
+- [Deployment Guide](docs/deployment.md): Instructions for deploying in production
+- [Crypto Documentation](crypto/README.md): Details of the blind signature implementation
+
+## Development
+
+### Running Tests
+
+```bash
+npm test
+```
+
+### Linting
+
+```bash
+npm run lint
+```
+
+## Production Deployment
+
+For production deployment instructions, see the [Deployment Guide](docs/deployment.md).
+
+## Security
+
+The Giftmint Server implements several security measures:
+
+- Blind signatures ensure that the mint cannot link tokens to creation requests
+- API key authentication for all endpoints
+- Database tracking to prevent double-spending
+- Regular key rotation
+- Secure token format
+
+## License
+
+This is free and unencumbered software released into the public domain. See the [Unlicense](LICENSE) for details.
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.

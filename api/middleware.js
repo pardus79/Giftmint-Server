@@ -1,98 +1,79 @@
-/**
- * API Middleware
- */
+'use strict';
 
 const config = require('../config/config');
-const pino = require('pino');
-
-// Initialize logger
-const logger = pino({
-  level: config.log.level,
-  transport: {
-    target: 'pino-pretty',
-    options: {
-      colorize: true
-    }
-  }
-});
 
 /**
- * Verify API key middleware
- * 
+ * Validates the API key provided in the X-API-Key header
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
- * @param {Function} next - Express next function
+ * @param {Function} next - Express next middleware function
  */
-function verifyApiKey(req, res, next) {
+function validateApiKey(req, res, next) {
+  // Skip API key validation for diagnostic endpoints if in development
+  if (config.isDevelopment && req.path.startsWith('/v1/diagnostic')) {
+    return next();
+  }
+
   const apiKey = req.headers['x-api-key'];
   
-  // Check if API key is provided
   if (!apiKey) {
-    logger.warn({ ip: req.ip }, 'API key missing');
     return res.status(401).json({
-      success: false,
-      message: 'API key is required'
+      error: {
+        code: 'MISSING_API_KEY',
+        message: 'API key is required'
+      }
     });
   }
   
-  // Check if API key is valid
-  if (!config.api.apiKeys.includes(apiKey)) {
-    logger.warn({ ip: req.ip, apiKey }, 'Invalid API key');
+  if (!config.apiKeys.includes(apiKey)) {
     return res.status(403).json({
-      success: false,
-      message: 'Invalid API key'
+      error: {
+        code: 'INVALID_API_KEY',
+        message: 'Invalid API key'
+      }
     });
   }
   
-  // API key is valid, proceed
   next();
 }
 
 /**
- * Validate request body middleware
- * 
- * @param {Object} schema - Validation schema
- * @returns {Function} Middleware function
+ * Rate limiting middleware
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ * @param {Function} next - Express next middleware function
  */
-function validateBody(schema) {
-  return (req, res, next) => {
-    const { error } = schema.validate(req.body);
-    
-    if (error) {
-      logger.warn({ 
-        ip: req.ip, 
-        body: req.body, 
-        error: error.details 
-      }, 'Invalid request body');
-      
-      return res.status(400).json({
-        success: false,
-        message: error.details[0].message
-      });
-    }
-    
-    next();
-  };
+function rateLimit(req, res, next) {
+  // Implementation using a proper rate-limiting library would go here
+  // For now, we'll just pass through as a placeholder
+  next();
 }
 
 /**
- * Error handler middleware
- * 
- * @param {Function} handler - Route handler function
- * @returns {Function} Middleware function
+ * Request validation middleware for token operations
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ * @param {Function} next - Express next middleware function
  */
-function asyncHandler(handler) {
-  return async (req, res, next) => {
-    try {
-      await handler(req, res, next);
-    } catch (error) {
-      next(error);
-    }
-  };
+function validateTokenRequest(req, res, next) {
+  // Validate request format for token operations
+  if (!req.body) {
+    return res.status(400).json({
+      error: {
+        code: 'INVALID_REQUEST',
+        message: 'Request body is required'
+      }
+    });
+  }
+  
+  // The specific validation logic will depend on the endpoint
+  // We'll implement specific validators for each endpoint
+  
+  next();
 }
 
 module.exports = {
-  verifyApiKey,
-  validateBody,
-  asyncHandler
+  validateApiKey,
+  rateLimit,
+  validateTokenRequest
 };
