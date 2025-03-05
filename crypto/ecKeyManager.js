@@ -216,8 +216,8 @@ async function createNewKeyPair(keysetId) {
  * Schedule key rotation
  */
 function scheduleKeyRotation() {
-  // Schedule key rotation at half the key rotation interval
-  const rotationInterval = config.crypto.keyRotationInterval * 5000; // Half interval in milliseconds
+  // Calculate interval in milliseconds (half the configured interval)
+  const rotationIntervalMs = (config.crypto.keyRotationInterval * 1000) / 2;
   
   setTimeout(async () => {
     try {
@@ -228,7 +228,7 @@ function scheduleKeyRotation() {
       logger.error({ error }, 'Failed to rotate EC keys');
       scheduleKeyRotation();
     }
-  }, rotationInterval);
+  }, rotationIntervalMs);
 }
 
 /**
@@ -243,8 +243,8 @@ async function rotateKeys() {
     
     // Create new key pairs for each keyset
     for (const keyset of activeKeysets) {
-      const newKeyId = await createNewKeyPair(keyset.id);
-      logger.info({ keyId: newKeyId, keysetId: keyset.id }, 'Created new EC key pair for keyset');
+      await createNewKeyPair(keyset.id);
+      // Removed duplicate logging here
     }
     
     logger.info('Rotated EC keys for all keysets');
