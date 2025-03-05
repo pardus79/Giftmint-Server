@@ -114,7 +114,13 @@ async function createToken(req, res) {
       const keyPairsMap = {};
       for (const denom of tokenDenominations) {
         if (!keyPairsMap[denom.id]) {
-          keyPairsMap[denom.id] = await keyManager.getKeyPairForDenomination(denom.id);
+          try {
+            keyPairsMap[denom.id] = await keyManager.getKeyPairForDenomination(denom.id);
+            logger.info(`Loaded keypair for denomination: ${denom.id} (${denom.value} ${denom.currency})`);
+          } catch (err) {
+            logger.error({error: err}, `Failed to load keypair for denomination: ${denom.id}`);
+            throw new Error(`Failed to load keypair for denomination: ${denom.id}`);
+          }
         }
       }
       
@@ -125,50 +131,68 @@ async function createToken(req, res) {
         for (const denom of tokenDenominations) {
           const tokenKeyPair = keyPairsMap[denom.id];
           
-          // Create token request
+          if (!tokenKeyPair) {
+            logger.error(`Missing keypair for denomination: ${denom.id}`);
+            throw new Error(`Missing keypair for denomination: ${denom.id}`);
+          }
+          
+          logger.info(`Creating token for denomination: ${denom.id} (${denom.value} ${denom.currency})`);
+          
+          // Create token request with proper denomination ID
           const tokenRequest = blindSignature.createTokenRequest(
-            tokenKeyPair.denominationId,
+            denom.id, // Make sure to use the correct denomination ID
             tokenKeyPair.publicKey
           );
+          
+          logger.debug(`Created token request with ID: ${tokenRequest.id}`);
           
           // Sign the blinded token
           const blindedTokenBuffer = Buffer.from(tokenRequest.blindedToken, 'base64');
           const signature = blindSignature.signBlindedMessage(blindedTokenBuffer, tokenKeyPair.privateKey);
+          
+          logger.debug(`Signed token request with ID: ${tokenRequest.id}`);
           
           // Process the signed token
           if (!tokenRequest.hashAlgo) {
             tokenRequest.hashAlgo = 'sha256';
           }
           
-          const finishedToken = blindSignature.processSignedToken(
-            tokenRequest,
-            signature.toString('base64'),
-            tokenKeyPair.publicKey
-          );
-          
-          // Create token object
-          const tokenObject = {
-            data: finishedToken.data,
-            signature: finishedToken.signature,
-            key_id: tokenKeyPair.id
-          };
-          
-          // Create token format
-          const compactToken = encodeToken(tokenObject, custom_prefix);
-          
-          createdTokens.push(compactToken);
-          denominationInfo.push({
-            id: denom.id,
-            value: denom.value,
-            currency: denom.currency,
-            description: denom.description
-          });
-          
-          // Add to batch updates
-          statUpdates.push({
-            denomination_id: tokenKeyPair.denominationId,
-            amount: 1
-          });
+          try {
+            const finishedToken = blindSignature.processSignedToken(
+              tokenRequest,
+              signature.toString('base64'),
+              tokenKeyPair.publicKey
+            );
+            
+            logger.debug(`Processed signed token with ID: ${tokenRequest.id}`);
+            
+            // Create token object
+            const tokenObject = {
+              data: finishedToken.data,
+              signature: finishedToken.signature,
+              key_id: tokenKeyPair.id
+            };
+            
+            // Create token format
+            const compactToken = encodeToken(tokenObject, custom_prefix);
+            
+            createdTokens.push(compactToken);
+            denominationInfo.push({
+              id: denom.id,
+              value: denom.value,
+              currency: denom.currency,
+              description: denom.description
+            });
+            
+            // Add to batch updates
+            statUpdates.push({
+              denomination_id: denom.id,
+              amount: 1
+            });
+          } catch (tokenError) {
+            logger.error({error: tokenError}, `Failed to process token for denomination: ${denom.id}`);
+            throw tokenError;
+          }
         }
         
         // Batch update token stats
