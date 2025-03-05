@@ -12,16 +12,37 @@ const keyManager = require('../crypto/keyManager');
 const blindSignature = require('../crypto/blindSignature');
 const { encodeToken, decodeToken } = require('../utils/tokenEncoder');
 
-// Initialize logger
-const logger = pino({
-  level: config.log.level,
-  transport: {
-    target: 'pino-pretty',
-    options: {
-      colorize: true
-    }
+// Initialize logger - use existing logger from server
+let logger;
+try {
+  // Try to get the logger from the server
+  const serverLogger = require('../server').logger;
+  if (serverLogger) {
+    logger = serverLogger;
+  } else {
+    // Fall back to creating a new logger
+    logger = pino({
+      level: config.log.level,
+      transport: {
+        target: 'pino-pretty',
+        options: {
+          colorize: true
+        }
+      }
+    });
   }
-});
+} catch (error) {
+  // If there's an error, create a new logger
+  logger = pino({
+    level: config.log.level,
+    transport: {
+      target: 'pino-pretty',
+      options: {
+        colorize: true
+      }
+    }
+  });
+}
 
 /**
  * List available denominations

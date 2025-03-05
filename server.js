@@ -33,6 +33,36 @@ const logger = pino({
   }
 });
 
+// Set up file logging if a log file is specified
+if (config.log.file) {
+  const fs = require('fs');
+  const logDir = require('path').dirname(config.log.file);
+  
+  // Create log directory if it doesn't exist
+  if (!fs.existsSync(logDir)) {
+    fs.mkdirSync(logDir, { recursive: true });
+  }
+  
+  // Create a write stream to the log file
+  const logStream = fs.createWriteStream(config.log.file, { flags: 'a' });
+  
+  // Add file transport
+  const fileLogger = pino({
+    level: config.log.level
+  }, logStream);
+  
+  // Override logger methods to write to both console and file
+  const originalLogger = { ...logger };
+  ['trace', 'debug', 'info', 'warn', 'error', 'fatal'].forEach(level => {
+    logger[level] = (obj, msg, ...args) => {
+      originalLogger[level](obj, msg, ...args);
+      fileLogger[level](obj, msg, ...args);
+    };
+  });
+  
+  logger.info(`Logging to file: ${config.log.file}`);
+}
+
 // Initialize express app
 const app = express();
 
@@ -134,4 +164,8 @@ if (require.main === module) {
   startServer();
 }
 
-module.exports = app; // Export for testing
+// Export app and logger for use in other modules
+module.exports = {
+  app,
+  logger
+};

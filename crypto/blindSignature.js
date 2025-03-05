@@ -19,7 +19,10 @@ const logger = pino({
     options: {
       colorize: true
     }
-  }
+  },
+  ...(config.log.file ? {
+    file: config.log.file
+  } : {})
 });
 
 /**
