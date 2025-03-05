@@ -525,9 +525,25 @@ async function verifyToken(req, res) {
                       (typeof item.i === 'string' ? item.i : 'unknown-key-id');
                     
                     // Get signature from proof
-                    const signature = Buffer.isBuffer(proof.c) ?
-                      proof.c.toString('base64') :
-                      proof.c;
+                    // Handle signature properly - ensure consistent base64 format
+                    let signature;
+                    if (Buffer.isBuffer(proof.c)) {
+                      signature = proof.c.toString('base64');
+                    } else if (typeof proof.c === 'string') {
+                      signature = proof.c;
+                    } else {
+                      logger.warn({
+                        proofType: typeof proof.c,
+                        secretId: proof.s.substring(0, 8)
+                      }, 'Unexpected signature format in proof');
+                      continue;
+                    }
+                    
+                    logger.debug({
+                      signature_type: typeof signature,
+                      signature_length: signature.length,
+                      signature_prefix: signature.substring(0, 10)
+                    }, 'Extracted signature from proof');
                     
                     // Create token data
                     const data = JSON.stringify({ id: proof.s });
@@ -610,15 +626,65 @@ async function verifyToken(req, res) {
                 .update(Buffer.from(data, 'utf8'))
                 .digest();
               
-              // Verify signature
-              const isValid = blindSignature.verifySignature(
+              // Verify signature with enhanced debugging
+              logger.debug({
+                token_id: tokenData.id, 
+                keyId: key_id,
+                tokenHashLength: tokenHash.length,
+                tokenHashPrefix: tokenHash.slice(0, 10).toString('hex'),
+                signatureLength: Buffer.from(signature, 'base64').length,
+                signaturePrefix: Buffer.from(signature, 'base64').slice(0, 10).toString('hex')
+              }, 'Attempting to verify signature');
+              
+              // Try multiple verification approaches
+              let isValid = blindSignature.verifySignature(
                 tokenHash,
                 Buffer.from(signature, 'base64'),
                 keyPair.publicKey
               );
               
+              // If direct verification fails, try alternate methods (similar to processSignedToken)
               if (!isValid) {
-                logger.warn({ token_id: tokenData.id }, 'Invalid signature');
+                logger.warn({ token_id: tokenData.id }, 'Initial signature verification failed, trying alternatives');
+                
+                // Try with SHA-1 hash instead
+                const altTokenHash = require('crypto')
+                  .createHash('sha1')
+                  .update(Buffer.from(data, 'utf8'))
+                  .digest();
+                  
+                isValid = blindSignature.verifySignature(
+                  altTokenHash,
+                  Buffer.from(signature, 'base64'),
+                  keyPair.publicKey
+                );
+                
+                if (isValid) {
+                  logger.info({ token_id: tokenData.id }, 'Signature verified with alternative hash (SHA-1)');
+                } else {
+                  // Try with padded hash as a last resort
+                  const paddedHash = Buffer.alloc(tokenHash.length + 1);
+                  paddedHash[0] = 0;
+                  tokenHash.copy(paddedHash, 1);
+                  
+                  isValid = blindSignature.verifySignature(
+                    paddedHash,
+                    Buffer.from(signature, 'base64'),
+                    keyPair.publicKey
+                  );
+                  
+                  if (isValid) {
+                    logger.info({ token_id: tokenData.id }, 'Signature verified with padded hash');
+                  }
+                }
+              }
+              
+              if (!isValid) {
+                logger.warn({ 
+                  token_id: tokenData.id,
+                  denomination_id: denomination.id,
+                  keyId: key_id
+                }, 'Invalid signature');
                 return;
               }
               

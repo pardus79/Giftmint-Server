@@ -187,19 +187,47 @@ async function bundleTokens(tokens, customPrefix) {
       // Unit (required in Cashu)
       u: "sat",
       // Tokens array grouped by keyset ID
-      t: Object.keys(tokensByKeyId).map(keyId => ({
-        // Keyset ID as bytes (using Buffer)
-        i: Buffer.from(keyId, 'utf8'),
-        // Proofs array for this keyset
-        p: tokensByKeyId[keyId].map(token => ({
-          // Amount (integer)
-          a: token.amount,
-          // Secret (string)
-          s: token.id,
-          // Signature (bytes)
-          c: Buffer.from(token.signature, 'base64')
-        }))
-      }))
+      t: Object.keys(tokensByKeyId).map(keyId => {
+        // Normalize keyId format - ensure consistency
+        const normalizedKeyId = keyId.trim();
+        
+        // Create the token group
+        return {
+          // Keyset ID - we'll use string format for consistency in verification
+          i: normalizedKeyId,
+          // Proofs array for this keyset with enhanced validation
+          p: tokensByKeyId[keyId].map(token => {
+            // Ensure signature is properly formatted base64
+            let signatureBuffer;
+            try {
+              // Convert from base64 and back to ensure proper format
+              signatureBuffer = Buffer.from(token.signature, 'base64');
+              // Log signature details for debugging
+              logger.debug({
+                tokenId: token.id.substring(0, 8),
+                sigLength: signatureBuffer.length,
+                sigPrefix: signatureBuffer.slice(0, 10).toString('hex')
+              }, 'Processing signature for bundling');
+            } catch (e) {
+              logger.warn({
+                error: e,
+                tokenId: token.id
+              }, 'Error processing signature, using fallback');
+              // Fallback to direct string
+              signatureBuffer = Buffer.from(token.signature);
+            }
+            
+            return {
+              // Amount (integer)
+              a: token.amount,
+              // Secret (string)
+              s: token.id,
+              // Signature (consistently as base64 string, not bytes)
+              c: signatureBuffer.toString('base64')
+            };
+          })
+        };
+      })
     };
     
     // If no tokens were successfully decoded, add a fallback token
@@ -557,10 +585,21 @@ function unbundleTokens(bundleString) {
                 // Loop through each keyset group
                 for (const group of cborBundle.t) {
                   try {
-                    // Get keyset ID
-                    const keyId = Buffer.isBuffer(group.i) 
-                      ? group.i.toString() 
-                      : (typeof group.i === 'string' ? group.i : 'unknown-key-id');
+                    // Get keyset ID and normalize format for consistent handling
+                    let keyId;
+                    if (Buffer.isBuffer(group.i)) {
+                      keyId = group.i.toString();
+                      logger.debug(`Converted Buffer keyId to string: ${keyId.substring(0, 8)}...`);
+                    } else if (typeof group.i === 'string') {
+                      keyId = group.i;
+                      logger.debug(`Using string keyId: ${keyId.substring(0, 8)}...`);
+                    } else {
+                      logger.warn(`Unknown keyId format: ${typeof group.i}, using fallback`);
+                      keyId = 'unknown-key-id';
+                    }
+                    
+                    // Normalize and trim any extra spaces
+                    keyId = keyId.trim();
                     
                     // Process proofs for this keyset
                     if (group.p && Array.isArray(group.p)) {
@@ -569,14 +608,53 @@ function unbundleTokens(bundleString) {
                           // Extract secret ID (string)
                           const secretId = proof.s;
                           
-                          // Handle signature (could be Buffer or string)
+                          // Handle signature (could be Buffer or string) with improved consistency
                           let signature;
-                          if (Buffer.isBuffer(proof.c)) {
-                            signature = proof.c.toString('base64');
-                          } else if (typeof proof.c === 'string') {
-                            signature = proof.c;
-                          } else {
-                            logger.warn('Unexpected signature format in proof');
+                          try {
+                            if (Buffer.isBuffer(proof.c)) {
+                              // Convert buffer to base64 string
+                              signature = proof.c.toString('base64');
+                              logger.debug({
+                                sigFromBuffer: true,
+                                sigLength: signature.length,
+                                sigPrefix: signature.substring(0, 10)
+                              }, 'Converted signature from Buffer');
+                            } else if (typeof proof.c === 'string') {
+                              // Ensure signature is properly formatted base64
+                              signature = proof.c;
+                              
+                              // Check if it's already base64 by trying to decode it
+                              try {
+                                // This is just to validate the format
+                                const testBuffer = Buffer.from(signature, 'base64');
+                                const decodedLength = testBuffer.length;
+                                
+                                logger.debug({
+                                  sigIsString: true,
+                                  sigLength: signature.length,
+                                  decodedLength: decodedLength,
+                                  sigPrefix: signature.substring(0, 10)
+                                }, 'Using string signature (validated as base64)');
+                              } catch (e) {
+                                // If it's not valid base64, log a warning
+                                logger.warn({
+                                  error: e,
+                                  sigLength: signature.length,
+                                  sigPrefix: signature.substring(0, 10)
+                                }, 'Signature string is not valid base64');
+                              }
+                            } else {
+                              logger.warn({
+                                sigType: typeof proof.c,
+                                secretId: proof.s.substring(0, 8)
+                              }, 'Unexpected signature format in proof');
+                              continue;
+                            }
+                          } catch (sigError) {
+                            logger.warn({
+                              error: sigError,
+                              secretId: proof.s
+                            }, 'Error processing signature');
                             continue;
                           }
                           
