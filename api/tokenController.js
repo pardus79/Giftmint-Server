@@ -139,19 +139,19 @@ async function createToken(req, res) {
           
           logger.info(`Creating token for denomination: ${denom.id} (${denom.value} ${denom.currency})`);
           
-          // Create token request with proper denomination ID
-          const tokenRequest = blindSignature.createTokenRequest(denom.id);
-          
-          logger.debug(`Created token request with ID: ${tokenRequest.id}`);
-          
-          // Sign the blinded message
-          const blindedMessage = Buffer.from(tokenRequest.blindedMessage, 'hex');
-          const privateKey = Buffer.from(tokenKeyPair.privateKey, 'hex');
-          const signature = blindSignature.signBlindedMessage(blindedMessage, privateKey);
-          
-          logger.debug(`Signed token request with ID: ${tokenRequest.id}`);
-          
           try {
+            // Create token request with proper denomination ID
+            const tokenRequest = blindSignature.createTokenRequest(denom.id);
+            
+            logger.debug(`Created token request with ID: ${tokenRequest.id}`);
+            
+            // Sign the blinded message
+            const blindedMessage = Buffer.from(tokenRequest.blindedMessage, 'hex');
+            const privateKey = Buffer.from(tokenKeyPair.privateKey, 'hex');
+            const signature = blindSignature.signBlindedMessage(blindedMessage, privateKey);
+            
+            logger.debug(`Signed token request with ID: ${tokenRequest.id}`);
+            
             // Process the signed token
             const finishedToken = blindSignature.processSignedToken(
               tokenRequest,
@@ -252,7 +252,10 @@ async function createToken(req, res) {
         });
       } catch (error) {
         await trx.rollback();
-        logger.error({ error }, 'Failed to create tokens with total_amount');
+        logger.error({ 
+          error_message: error.message || 'Unknown error', 
+          stack: error.stack 
+        }, 'Failed to create tokens with total_amount');
         throw error;
       }
     }
@@ -367,7 +370,10 @@ async function createToken(req, res) {
       }
     });
   } catch (error) {
-    logger.error({ error }, 'Failed to create token');
+    logger.error({ 
+      error_message: error.message || 'Unknown error', 
+      stack: error.stack 
+    }, 'Failed to create token');
     res.status(500).json({
       success: false,
       message: 'Failed to create token',
@@ -2126,7 +2132,10 @@ async function createECToken(req, res) {
         });
       } catch (error) {
         await trx.rollback();
-        logger.error({ error }, 'Failed to create EC tokens with total_amount');
+        logger.error({ 
+          error_message: error.message || 'Unknown error', 
+          stack: error.stack 
+        }, 'Failed to create EC tokens with total_amount');
         throw error;
       }
     }
@@ -2253,7 +2262,10 @@ async function createECToken(req, res) {
       }
     });
   } catch (error) {
-    logger.error({ error }, 'Failed to create EC token');
+    logger.error({ 
+      error_message: error.message || 'Unknown error', 
+      stack: error.stack 
+    }, 'Failed to create EC token');
     res.status(500).json({
       success: false,
       message: 'Failed to create EC token',
