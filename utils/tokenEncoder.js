@@ -239,14 +239,14 @@ async function bundleTokens(tokens, customPrefix) {
         
         // Create the token group
         return {
-          // Keyset ID - we'll use string format for consistency in verification
-          i: normalizedKeyId,
+          // Keyset ID as Buffer for compact binary representation in CBOR
+          i: Buffer.from(normalizedKeyId, 'utf8'),
           // Proofs array for this keyset with enhanced validation
           p: tokensByKeyId[keyId].map(token => {
             // Ensure signature is properly formatted base64
             let signatureBuffer;
             try {
-              // Convert from base64 and back to ensure proper format
+              // Convert from base64 to buffer for compact binary representation
               signatureBuffer = Buffer.from(token.signature, 'base64');
               // Log signature details for debugging
               logger.debug({
@@ -266,10 +266,10 @@ async function bundleTokens(tokens, customPrefix) {
             return {
               // Amount (integer)
               a: token.amount,
-              // Secret (string)
+              // Secret (string) - keeping as string since it's needed for lookups
               s: token.id,
-              // Signature (consistently as base64 string, not bytes)
-              c: signatureBuffer.toString('base64')
+              // Signature as raw buffer for compact binary representation
+              c: signatureBuffer
             };
           })
         };
@@ -347,14 +347,18 @@ async function bundleTokens(tokens, customPrefix) {
         } else {
           logger.info(`Successfully decoded ${Object.keys(tokensByKeyId).length} token groups with direct approach`);
           
-          // Rebuild the tokenV4 structure with our newly decoded tokens
+          // Rebuild the tokenV4 structure with our newly decoded tokens - using Buffer for binary data
           tokenV4.t = Object.keys(tokensByKeyId).map(keyId => {
+            // Use binary format for key ID and signatures to make the CBOR more compact
             return {
-              i: keyId,
+              // Convert key ID to Buffer for compact representation
+              i: Buffer.from(keyId, 'utf8'),
+              // Convert each proof to use binary format for signatures
               p: tokensByKeyId[keyId].map(token => ({
-                a: token.amount,
-                s: token.id,
-                c: token.signature
+                a: token.amount,  // Keep amount as integer
+                s: token.id,      // Keep ID as string (needed for lookups)
+                // Convert signature to Buffer for compact binary representation
+                c: Buffer.from(token.signature, 'base64')  
               }))
             };
           });
@@ -399,13 +403,13 @@ async function bundleTokens(tokens, customPrefix) {
         const tokenObject = JSON.parse(tokenBuffer.toString());
         const dataObj = JSON.parse(tokenObject.data);
         
-        // Add a single token with this keyset
+        // Add a single token with this keyset - using Buffer for compact binary representation
         tokenV4.t.push({
-          i: tokenObject.key_id,
+          i: Buffer.from(tokenObject.key_id, 'utf8'),
           p: [{
             a: 1, // Default amount
             s: dataObj.id,
-            c: tokenObject.signature
+            c: Buffer.from(tokenObject.signature, 'base64')
           }]
         });
         
@@ -413,13 +417,13 @@ async function bundleTokens(tokens, customPrefix) {
       } catch (err) {
         logger.warn({ error: err }, 'Failed to add fallback token, using dummy data');
         
-        // Last resort - completely dummy data
+        // Last resort - completely dummy data (using buffer for consistent format)
         tokenV4.t.push({
-          i: "fallback-key-id",
+          i: Buffer.from("fallback-key-id", 'utf8'),
           p: [{
             a: 1,
             s: "fallback-secret-" + Date.now(),
-            c: "fallback-signature"
+            c: Buffer.from("fallback-signature", 'utf8')
           }]
         });
       }
