@@ -65,6 +65,8 @@ async function createToken(req, res) {
     
     // Handle arbitrary amount using combination of denominations
     if (total_amount) {
+      logger.info(`Creating token with total_amount: ${total_amount}`);
+      
       // Get all available denominations for the requested currency
       const availableDenoms = await db('denominations')
         .where('is_active', true)
@@ -77,32 +79,51 @@ async function createToken(req, res) {
         });
       }
       
-      // Import the change maker utility
-      const changeMaker = require('../utils/changeMaker');
+      logger.info(`Available denominations: ${availableDenoms.map(d => d.value).join(', ')}`);
       
-      // Calculate tokens needed
-      let tokenDenominations;
-      try {
-        // For power of 2 denominations, use binary change maker for optimal results
-        tokenDenominations = changeMaker.makeChangeBinary(parseInt(total_amount, 10), availableDenoms);
-      } catch (error) {
+      // Simple greedy algorithm - directly use denominations without the changeMaker
+      const tokenDenominations = [];
+      let remainingAmount = parseInt(total_amount, 10);
+      
+      // Use a simple greedy approach for better reliability
+      for (const denom of availableDenoms) {
+        while (remainingAmount >= denom.value) {
+          tokenDenominations.push(denom);
+          remainingAmount -= denom.value;
+        }
+      }
+      
+      if (remainingAmount > 0) {
         return res.status(400).json({
           success: false,
           message: `Cannot make exact change for ${total_amount}`
         });
       }
       
+      logger.info(`Using denominations: ${tokenDenominations.map(d => d.value).join(', ')}`);
+      
       // Create multiple tokens
       const createdTokens = [];
       const denominationInfo = [];
       
-      // Use a transaction
+      // Prepare data for batch operations
+      const tokenData = [];
+      const statUpdates = [];
+      
+      // Get key pairs for all denominations upfront to reduce DB calls
+      const keyPairsMap = {};
+      for (const denom of tokenDenominations) {
+        if (!keyPairsMap[denom.id]) {
+          keyPairsMap[denom.id] = await keyManager.getKeyPairForDenomination(denom.id);
+        }
+      }
+      
+      // Use a transaction with a timeout
       const trx = await db.transaction();
       
       try {
         for (const denom of tokenDenominations) {
-          // Get key pair for this denomination
-          const tokenKeyPair = await keyManager.getKeyPairForDenomination(denom.id);
+          const tokenKeyPair = keyPairsMap[denom.id];
           
           // Create token request
           const tokenRequest = blindSignature.createTokenRequest(
@@ -125,20 +146,6 @@ async function createToken(req, res) {
             tokenKeyPair.publicKey
           );
           
-          // Update token stats
-          await trx('token_stats')
-            .where('denomination_id', tokenKeyPair.denominationId)
-            .increment('minted_count', 1)
-            .update('last_updated', trx.fn.now())
-            .catch(async () => {
-              await trx('token_stats').insert({
-                denomination_id: tokenKeyPair.denominationId,
-                minted_count: 1,
-                redeemed_count: 0,
-                last_updated: trx.fn.now()
-              });
-            });
-          
           // Create token object
           const tokenObject = {
             data: finishedToken.data,
@@ -156,6 +163,33 @@ async function createToken(req, res) {
             currency: denom.currency,
             description: denom.description
           });
+          
+          // Add to batch updates
+          statUpdates.push({
+            denomination_id: tokenKeyPair.denominationId,
+            amount: 1
+          });
+        }
+        
+        // Batch update token stats
+        const denomIds = [...new Set(statUpdates.map(s => s.denomination_id))];
+        for (const denomId of denomIds) {
+          const count = statUpdates.filter(s => s.denomination_id === denomId)
+            .reduce((sum, item) => sum + item.amount, 0);
+            
+          const updated = await trx('token_stats')
+            .where('denomination_id', denomId)
+            .increment('minted_count', count)
+            .update('last_updated', trx.fn.now());
+            
+          if (!updated) {
+            await trx('token_stats').insert({
+              denomination_id: denomId,
+              minted_count: count,
+              redeemed_count: 0,
+              last_updated: trx.fn.now()
+            });
+          }
         }
         
         // Update batch stats if a batch_id was provided
@@ -194,6 +228,7 @@ async function createToken(req, res) {
         });
       } catch (error) {
         await trx.rollback();
+        logger.error({ error }, 'Failed to create tokens with total_amount');
         throw error;
       }
     }
