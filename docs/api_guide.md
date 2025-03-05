@@ -62,6 +62,8 @@ curl -X POST https://your-mint.com/api/v1/token/create \
 
 When using `total_amount`, a `bundle` property is also returned that contains all tokens bundled into a single string for easier sharing. Users can paste the entire bundle string and it will be recognized as multiple tokens.
 
+The bundle format is space-efficient and follows a similar approach to Cashu's token bundling. It uses abbreviated key names and optimized serialization to keep the token size as small as possible for easy sharing.
+
 ### List Denominations
 
 **Endpoint**: `GET /api/v1/token/denominations`

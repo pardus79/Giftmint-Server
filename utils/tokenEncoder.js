@@ -56,11 +56,11 @@ function encodeToken(token, customPrefix) {
 }
 
 /**
- * Bundle multiple tokens into a single string for easy sharing
+ * Bundle multiple tokens into a single string for easy sharing (compact format)
  * 
  * @param {Array<string>} tokens - Array of encoded token strings
  * @param {string} [customPrefix] - Optional custom prefix to use
- * @returns {string} A bundled token string
+ * @returns {string} A bundled token string in compact format
  */
 function bundleTokens(tokens, customPrefix) {
   try {
@@ -77,29 +77,86 @@ function bundleTokens(tokens, customPrefix) {
       return tokens[0];
     }
     
-    // Create a bundle object with version and tokens
-    const bundle = {
-      v: 1, // Version for future compatibility
-      tokens: tokens,
-      count: tokens.length,
-      created: Date.now()
+    // Decode all tokens to extract their real contents
+    const tokenObjects = [];
+    
+    for (const token of tokens) {
+      try {
+        // Skip the prefix by finding the first base64 character
+        let base64Start = -1;
+        for (let i = 0; i < token.length; i++) {
+          const char = token[i];
+          if ((char >= 'A' && char <= 'Z') || 
+              (char >= 'a' && char <= 'z') || 
+              (char >= '0' && char <= '9') ||
+              char === '-' || char === '_') {
+            base64Start = i;
+            break;
+          }
+        }
+        
+        // Skip prefix and get base64 part
+        const base64Token = token.slice(base64Start);
+        
+        // Convert to standard base64
+        let standardBase64 = base64Token
+          .replace(/-/g, '+')
+          .replace(/_/g, '/');
+        
+        // Add padding if needed
+        while (standardBase64.length % 4) {
+          standardBase64 += '=';
+        }
+        
+        // Decode the base64 string
+        const tokenBuffer = Buffer.from(standardBase64, 'base64');
+        const tokenObject = JSON.parse(tokenBuffer.toString());
+        
+        tokenObjects.push(tokenObject);
+      } catch (err) {
+        // Skip invalid tokens
+        logger.warn({ error: err, token }, 'Failed to decode token for bundling');
+      }
+    }
+    
+    // Create a compact bundle
+    const compact = {
+      v: 2, // Version for compact format
+      t: tokenObjects,
+      c: tokenObjects.length
     };
     
-    // Convert to buffer
-    const bundleBuffer = Buffer.from(JSON.stringify(bundle));
+    // Convert amount values to string to save space
+    const processTokens = (obj) => {
+      if (Array.isArray(obj)) {
+        return obj.map(processTokens);
+      } else if (obj && typeof obj === 'object') {
+        const result = {};
+        for (const [key, value] of Object.entries(obj)) {
+          // Skip the 'created' property to save space
+          if (key === 'created') continue;
+          result[key] = processTokens(value);
+        }
+        return result;
+      }
+      return obj;
+    };
     
-    // Base64 encode
-    const base64Bundle = bundleBuffer.toString('base64');
+    const compactBundle = processTokens(compact);
     
-    // URL-safe encoding
-    const urlSafeBundle = base64Bundle
+    // Convert to buffer - use smaller JSON stringification
+    const jsonStr = JSON.stringify(compactBundle);
+    const bundleBuffer = Buffer.from(jsonStr);
+    
+    // Base64 encode with URL-safe characters
+    const base64Bundle = bundleBuffer.toString('base64')
       .replace(/\+/g, '-')
       .replace(/\//g, '_')
       .replace(/=/g, '');
     
-    // Add bundle prefix
+    // Add compact bundle prefix
     const prefix = getTokenPrefix(customPrefix);
-    return `${prefix}bundle-${urlSafeBundle}`;
+    return `${prefix}token${base64Bundle}`;
   } catch (error) {
     logger.error({ error }, 'Failed to bundle tokens');
     throw new Error(`Failed to bundle tokens: ${error.message}`);
@@ -214,18 +271,48 @@ function unbundleTokens(bundleString) {
   try {
     logger.debug({ bundle: bundleString.substring(0, 20) + '...' }, 'Unbundling tokens');
     
-    // Find bundle identifier
-    const bundleMarker = 'bundle-';
-    const bundleIndex = bundleString.indexOf(bundleMarker);
+    // Check if it's the old bundle format with bundle- marker
+    const oldBundleMarker = 'bundle-';
+    const oldBundleIndex = bundleString.indexOf(oldBundleMarker);
     
-    if (bundleIndex === -1) {
-      logger.warn('Not a bundle - bundle marker not found');
+    if (oldBundleIndex !== -1) {
+      // Handle old bundle format
+      const base64Bundle = bundleString.slice(oldBundleIndex + oldBundleMarker.length);
+      logger.debug({ base64Bundle: base64Bundle.substring(0, 20) + '...' }, 'Extracted base64 bundle (old format)');
+      
+      // Restore the URL-safe base64 to regular base64
+      let standardBase64 = base64Bundle
+        .replace(/-/g, '+')
+        .replace(/_/g, '/');
+      
+      // Add padding if needed
+      while (standardBase64.length % 4) {
+        standardBase64 += '=';
+      }
+      
+      // Decode the base64 string
+      const bundleBuffer = Buffer.from(standardBase64, 'base64');
+      
+      // Parse the JSON
+      const bundle = JSON.parse(bundleBuffer.toString());
+      logger.debug({ bundleVersion: bundle.v, tokenCount: bundle.count }, 'Successfully decoded bundle (old format)');
+      
+      return bundle;
+    }
+    
+    // Handle new compact format (with 'token' prefix)
+    // First locate the 'token' marker in the original string
+    const tokenMarker = 'token';
+    const tokenIndex = bundleString.indexOf(tokenMarker);
+    
+    if (tokenIndex === -1) {
+      logger.warn('Not a recognized bundle format');
       throw new Error('Not a valid token bundle');
     }
     
     // Extract the base64 part
-    const base64Bundle = bundleString.slice(bundleIndex + bundleMarker.length);
-    logger.debug({ base64Bundle: base64Bundle.substring(0, 20) + '...' }, 'Extracted base64 bundle');
+    const base64Bundle = bundleString.slice(tokenIndex + tokenMarker.length);
+    logger.debug({ base64Bundle: base64Bundle.substring(0, 20) + '...' }, 'Extracted base64 bundle (compact format)');
     
     // Restore the URL-safe base64 to regular base64
     let standardBase64 = base64Bundle
@@ -242,7 +329,7 @@ function unbundleTokens(bundleString) {
     
     // Parse the JSON
     const bundle = JSON.parse(bundleBuffer.toString());
-    logger.debug({ bundleVersion: bundle.v, tokenCount: bundle.count }, 'Successfully decoded bundle');
+    logger.debug({ bundleVersion: bundle.v, tokenCount: bundle.c }, 'Successfully decoded bundle (compact format)');
     
     return bundle;
   } catch (error) {
