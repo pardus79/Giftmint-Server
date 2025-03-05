@@ -6,6 +6,16 @@ This document describes the compact token bundling feature implemented in the Gi
 
 The compact token bundling feature provides a more space-efficient way to encode and bundle tokens. It uses techniques inspired by the Cashu v4 token format to reduce the size of bundled tokens by approximately 30%.
 
+## Custom Prefixes
+
+The compact token bundling system supports custom prefixes for tokens and bundles. The prefix can be specified in three ways:
+
+1. Via the `TOKEN_PREFIX` environment variable in `.env`
+2. Via the `custom_prefix` parameter in API requests (e.g., `/api/v1/token/create`)
+3. Programmatically via the `customPrefix` parameter in the bundling functions
+
+Token bundles will keep their custom prefix throughout the system, and all verification/redemption endpoints can handle tokens with different prefixes.
+
 ## Implementation Details
 
 The implementation is in `/utils/compactTokenEncoder.js` and includes the following key features:

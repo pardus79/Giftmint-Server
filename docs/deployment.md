@@ -103,13 +103,19 @@ This document outlines the steps to deploy the Giftmint Server in different envi
 
 6. **Set up the service**
 
-   Create a systemd service file:
+   Copy the systemd service file from the repository:
+
+   ```bash
+   sudo cp /path/to/giftmint-server/giftmint.service /etc/systemd/system/
+   ```
+
+   Edit the service file to update paths and settings:
 
    ```bash
    sudo nano /etc/systemd/system/giftmint.service
    ```
 
-   Add the following content:
+   Make sure to update the following:
 
    ```
    [Unit]
@@ -121,14 +127,19 @@ This document outlines the steps to deploy the Giftmint Server in different envi
    User=nodejs
    WorkingDirectory=/path/to/giftmint-server
    ExecStart=/usr/bin/node /path/to/giftmint-server/server.js
+   Environment=PORT=3500
    Restart=on-failure
+   RestartSec=10
+   StandardOutput=syslog
+   StandardError=syslog
+   SyslogIdentifier=giftmint
    Environment=NODE_ENV=production
    
    [Install]
    WantedBy=multi-user.target
    ```
 
-   Replace `/path/to/giftmint-server` with the actual path.
+   Replace `/path/to/giftmint-server` with the actual path to your installation directory.
 
 7. **Start the service**
 
@@ -239,6 +250,7 @@ You can also deploy using Docker:
 2. **HTTPS**
    - Always use HTTPS in production
    - Set proper SSL protocols and ciphers
+   - All API endpoints require HTTPS - HTTP requests will not be processed correctly
    
 3. **File Permissions**
    - Secure the key storage directory
