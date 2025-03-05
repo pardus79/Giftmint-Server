@@ -22,40 +22,40 @@ const keyManager = require('./crypto/keyManager');
 const apiRoutes = require('./api/routes');
 const { verifyApiKey } = require('./api/middleware');
 
-// Initialize logger
-const logger = pino({
-  level: config.log.level,
-  transport: {
-    target: 'pino-pretty',
-    options: {
-      colorize: true
-    }
-  }
-});
+// Set up logging
+const fs = require('fs');
+const path = require('path');
 
-// Set up file logging if a log file is specified
+// Create logging streams based on configuration
+let logStreams = [{ stream: process.stdout }];
+
+// Add file stream if configured
 if (config.log.file) {
-  const fs = require('fs');
-  const logDir = require('path').dirname(config.log.file);
+  const logDir = path.dirname(config.log.file);
   
   // Create log directory if it doesn't exist
   if (!fs.existsSync(logDir)) {
     fs.mkdirSync(logDir, { recursive: true });
   }
   
-  // Simply use a multi-transport logger instead of overriding methods
-  const streams = [
-    { stream: process.stdout },  // Log to console
-    { stream: fs.createWriteStream(config.log.file, { flags: 'a' }) }  // Log to file
-  ];
-  
-  // Replace the logger with a multi-destination logger
-  logger = pino({
-    level: config.log.level
-  }, pino.multistream(streams));
-  
+  // Add file stream
+  logStreams.push({ stream: fs.createWriteStream(config.log.file, { flags: 'a' }) });
   console.log(`Logging to file: ${config.log.file}`);
 }
+
+// Initialize logger with all streams
+const logger = pino(
+  {
+    level: config.log.level,
+    transport: {
+      target: 'pino-pretty',
+      options: {
+        colorize: true
+      }
+    }
+  }, 
+  pino.multistream(logStreams)
+);
 
 // Initialize express app
 const app = express();
