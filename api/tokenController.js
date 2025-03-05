@@ -465,12 +465,24 @@ async function verifyToken(req, res) {
           
           // Count tokens and proofs for debugging
           let totalProofsCount = 0;
+          let totalTokensInDecodedArray = 0;
           
+          // Log details about the extracted proofs
           if (isRawStructure) {
             // This is a raw CBOR structure with token groups
             for (const group of unbundled.t) {
               if (group && group.p && Array.isArray(group.p)) {
                 totalProofsCount += group.p.length;
+                
+                // Log details about each proof in this group for debugging
+                logger.debug({
+                  keyId: group.i && Buffer.isBuffer(group.i) ? 
+                    group.i.toString().substring(0, 8) + '...' : 
+                    (typeof group.i === 'string' ? group.i.substring(0, 8) + '...' : 'unknown'),
+                  proofCount: group.p.length,
+                  firstProofId: group.p.length > 0 && group.p[0].s ? 
+                    group.p[0].s.substring(0, 8) + '...' : 'unknown'
+                }, 'Proof group details');
               }
             }
           } else {
@@ -487,7 +499,27 @@ async function verifyToken(req, res) {
             }, 0);
           }
           
-          logger.debug(`Found approximately ${totalProofsCount} tokens to verify across ${unbundled.t.length} groups`);
+          // Count decoded tokens
+          if (hasDecodedTokens) {
+            totalTokensInDecodedArray = unbundled.decoded_tokens.length;
+            
+            // Log the first few decoded tokens for debugging
+            for (let i = 0; i < Math.min(unbundled.decoded_tokens.length, 3); i++) {
+              const token = unbundled.decoded_tokens[i];
+              logger.debug({
+                index: i,
+                tokenPrefix: token.substring(0, 20) + '...',
+                tokenLength: token.length
+              }, 'Decoded token from array');
+            }
+          }
+          
+          // Compare the counts for troubleshooting
+          logger.debug({
+            totalProofsInStructure: totalProofsCount,
+            totalTokensInDecodedArray: totalTokensInDecodedArray,
+            groupCount: unbundled.t.length
+          }, `Found tokens to verify across ${unbundled.t.length} groups`);
           
           // Deep logging of the first token group for analysis
           if (unbundled.t.length > 0) {

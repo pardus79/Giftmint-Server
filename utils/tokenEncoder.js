@@ -82,20 +82,29 @@ async function bundleTokens(tokens, customPrefix) {
     
     logger.debug(`Bundling ${tokens.length} tokens using Cashu TokenV4 format`);
     
-    // Log token info for debugging
+    // Log detailed token info for debugging
     for (let i = 0; i < Math.min(tokens.length, 6); i++) {
       const token = tokens[i];
       logger.debug({ 
         tokenIndex: i,
         tokenPrefix: token.substring(0, 20) + '...',
-        tokenLength: token.length
+        tokenLength: token.length,
+        hasPrefix: token.startsWith('btcpins') || token.startsWith('giftmint'),
+        prefix: token.match(/^[a-zA-Z]+/)[0]
       }, 'Token for bundling');
     }
+    
+    logger.debug(`Total tokens to bundle: ${tokens.length}`);
     
     // First decode all tokens to extract their data for bundling
     const decodedTokens = [];
     for (const token of tokens) {
       try {
+        logger.debug({
+          tokenPrefix: token.substring(0, 15),
+          tokenLength: token.length
+        }, 'Processing token for bundling');
+        
         // Skip the prefix by finding the first base64 character
         let base64Start = -1;
         for (let i = 0; i < token.length; i++) {
@@ -111,6 +120,13 @@ async function bundleTokens(tokens, customPrefix) {
         
         // Skip prefix and get base64 part
         const base64Token = token.slice(base64Start);
+        
+        // Log debug info
+        logger.debug({
+          base64Start,
+          prefixDetected: token.substring(0, base64Start),
+          base64Prefix: base64Token.substring(0, 15)
+        }, 'Extracted base64 portion of token');
         
         // Convert to standard base64
         let standardBase64 = base64Token
@@ -136,9 +152,18 @@ async function bundleTokens(tokens, customPrefix) {
           keyId: tokenObject.key_id,         // Key ID
           amount: 1                          // Default amount, normally determined by denomination
         });
+        
+        logger.debug({
+          id: dataObj.id.substring(0, 8),
+          keyId: tokenObject.key_id.substring(0, 8),
+          decodedTokensCount: decodedTokens.length
+        }, 'Successfully decoded token for bundling');
       } catch (err) {
-        logger.warn({ error: err, token: token.substring(0, 40) + '...' }, 
-          'Failed to decode token for CBOR bundling');
+        logger.error({ 
+          error: err, 
+          errorMessage: err.message,
+          tokenPrefix: token.substring(0, 40)
+        }, 'Failed to decode token for CBOR bundling');
       }
     }
     
@@ -151,6 +176,13 @@ async function bundleTokens(tokens, customPrefix) {
       }
       tokensByKeyId[token.keyId].push(token);
     }
+    
+    logger.debug({
+      decodedTokensCount: decodedTokens.length,
+      uniqueKeyIdsCount: Object.keys(tokensByKeyId).length,
+      keyIdList: Object.keys(tokensByKeyId),
+      firstFewTokenIds: decodedTokens.slice(0, 3).map(t => t.id.substring(0, 8))
+    }, 'Token grouping details before bundling');
     
     // Log decoded tokens and grouping results
     logger.debug({
@@ -282,8 +314,24 @@ async function bundleTokens(tokens, customPrefix) {
       format: 'Cashu TokenV4'
     }, 'Created Cashu-compatible token structure');
     
+    // Logging for troubleshooting
+    logger.debug({
+      tokenStructure: 'TokenV4',
+      mintUrl: tokenV4.m,
+      unit: tokenV4.u,
+      groupCount: tokenV4.t.length,
+      totalProofs: tokenV4.t.reduce((sum, t) => sum + t.p.length, 0),
+      firstFewGroupSizes: tokenV4.t.slice(0, 3).map(g => g.p.length)
+    }, 'Token structure before CBOR encoding');
+    
     // Encode using CBOR
     const cborData = cbor.encode(tokenV4);
+    
+    // Detailed debugging of CBOR data
+    logger.debug({
+      cborLength: cborData.length,
+      cborHexPrefix: cborData.slice(0, 20).toString('hex')
+    }, 'CBOR data details');
     
     // Convert to URL-safe base64 (just like Cashu)
     const base64Bundle = cborData.toString('base64')
@@ -680,7 +728,7 @@ function unbundleTokens(bundleString) {
                           
                           recreatedTokens.push(encodedToken);
                           
-                          logger.debug(`Extracted token from Cashu V4 format with secret ID: ${secretId.substring(0, 8)}...`);
+                          logger.debug(`Extracted token #${recreatedTokens.length} from Cashu V4 format with secret ID: ${secretId.substring(0, 8)}...`);
                         } catch (proofError) {
                           logger.warn({ error: proofError }, 'Failed to process V4 proof');
                         }
