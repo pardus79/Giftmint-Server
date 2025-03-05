@@ -59,30 +59,78 @@ function makeChangeBinary(amount, denominations) {
     denomMap[denom.value] = denom;
   }
   
+  // Sort denominations in descending order
+  const sortedDenoms = [...denominations].sort((a, b) => b.value - a.value);
+  
   const result = [];
   let remainingAmount = amount;
   
-  // Find largest power of 2 less than or equal to the amount
-  let powerOf2 = 1;
-  while (powerOf2 * 2 <= remainingAmount) {
-    powerOf2 *= 2;
+  // First try using the largest available denomination that fits
+  for (const denom of sortedDenoms) {
+    if (denom.value <= remainingAmount) {
+      result.push(denom);
+      remainingAmount -= denom.value;
+      break;
+    }
   }
   
-  // Work downward through powers of 2
-  while (remainingAmount > 0) {
-    if (remainingAmount >= powerOf2) {
-      // If we have this denomination, add it
-      if (denomMap[powerOf2]) {
-        result.push(denomMap[powerOf2]);
-        remainingAmount -= powerOf2;
-      } else {
-        // If we don't have this exact power of 2, try to find smaller denominations
-        const smallerDenoms = makeChange(powerOf2, denominations, powerOf2 / 2);
-        result.push(...smallerDenoms);
-        remainingAmount -= powerOf2;
-      }
+  // Then use the binary approach for the remaining amount if needed
+  if (remainingAmount > 0) {
+    // Find largest power of 2 less than or equal to the remaining amount
+    let powerOf2 = 1;
+    while (powerOf2 * 2 <= remainingAmount) {
+      powerOf2 *= 2;
     }
-    powerOf2 = Math.floor(powerOf2 / 2);
+    
+    // Work downward through powers of 2
+    while (remainingAmount > 0) {
+      if (remainingAmount >= powerOf2) {
+        // If we have this denomination, add it
+        if (denomMap[powerOf2]) {
+          result.push(denomMap[powerOf2]);
+          remainingAmount -= powerOf2;
+        } else {
+          // Try to find the largest denomination that fits
+          let found = false;
+          for (const denom of sortedDenoms) {
+            if (denom.value <= remainingAmount) {
+              result.push(denom);
+              remainingAmount -= denom.value;
+              found = true;
+              break;
+            }
+          }
+          
+          // If no suitable denomination found, fall back to makeChange
+          if (!found) {
+            try {
+              const smallerDenoms = makeChange(powerOf2, denominations, powerOf2 / 2);
+              result.push(...smallerDenoms);
+              remainingAmount -= powerOf2;
+            } catch (error) {
+              // If makeChange fails, try a greedy approach for the current amount
+              const greedyDenoms = [];
+              let tempAmount = remainingAmount;
+              
+              for (const denom of sortedDenoms) {
+                while (tempAmount >= denom.value) {
+                  greedyDenoms.push(denom);
+                  tempAmount -= denom.value;
+                }
+              }
+              
+              if (tempAmount === 0) {
+                result.push(...greedyDenoms);
+                remainingAmount = 0;
+              } else {
+                throw new Error(`Cannot make change for ${amount}`);
+              }
+            }
+          }
+        }
+      }
+      powerOf2 = Math.floor(powerOf2 / 2);
+    }
   }
   
   return result;
