@@ -23,6 +23,33 @@ const logger = pino({
   }
 });
 
+/**
+ * Helper function to ensure an input is converted to Uint8Array
+ * 
+ * @param {Buffer|Uint8Array|string} input - Input to convert
+ * @param {string} [encoding] - Encoding if input is string (default: 'hex')
+ * @returns {Uint8Array} Uint8Array representation
+ */
+function toUint8Array(input, encoding = 'hex') {
+  if (input instanceof Uint8Array) {
+    return input;
+  }
+  
+  if (Buffer.isBuffer(input)) {
+    return new Uint8Array(input);
+  }
+  
+  if (typeof input === 'string') {
+    return new Uint8Array(Buffer.from(input, encoding));
+  }
+  
+  if (Array.isArray(input)) {
+    return new Uint8Array(input);
+  }
+  
+  throw new Error(`Cannot convert ${typeof input} to Uint8Array`);
+}
+
 // Domain separator for hash_to_curve (private to this implementation)
 const DOMAIN_SEPARATOR = Buffer.from('Secp256k1_HashToCurve_Giftmint_');
 
@@ -30,16 +57,17 @@ const DOMAIN_SEPARATOR = Buffer.from('Secp256k1_HashToCurve_Giftmint_');
  * Maps a message to a point on the secp256k1 curve, using the specified domain separator
  * 
  * @param {Buffer|string} message - Message to hash to curve
- * @returns {Buffer} Public key point on curve
+ * @returns {Uint8Array} Public key point on curve
  */
 function hashToCurve(message) {
-  if (typeof message === 'string') {
-    message = Buffer.from(message, 'utf8');
-  }
+  // Convert message to Buffer if it's a string
+  const messageBuffer = typeof message === 'string' 
+    ? Buffer.from(message, 'utf8') 
+    : Buffer.from(message);
   
   // Create the message hash with domain separator
   const msgHash = crypto.createHash('sha256')
-    .update(Buffer.concat([DOMAIN_SEPARATOR, message]))
+    .update(Buffer.concat([DOMAIN_SEPARATOR, messageBuffer]))
     .digest();
   
   // Try to find a valid point by incrementing counter
@@ -57,14 +85,17 @@ function hashToCurve(message) {
     // Prepend 0x02 to make a compressed public key format
     const candidateKey = Buffer.concat([Buffer.from([0x02]), attempt]);
     
+    // Convert to Uint8Array for secp256k1
+    const candidateKeyUint8 = new Uint8Array(candidateKey);
+    
     // Check if it's a valid secp256k1 point
     try {
-      if (secp256k1.publicKeyVerify(Uint8Array.from(candidateKey))) {
+      if (secp256k1.publicKeyVerify(candidateKeyUint8)) {
         logger.debug({
           counter,
-          candidateKeyPrefix: candidateKey.slice(0, 5).toString('hex')
+          candidateKeyPrefix: Buffer.from(candidateKeyUint8.slice(0, 5)).toString('hex')
         }, 'Found valid curve point');
-        return Uint8Array.from(candidateKey);
+        return candidateKeyUint8;
       }
     } catch (error) {
       // Not a valid point, try next counter
@@ -114,20 +145,22 @@ function generateToken() {
 /**
  * Blind a message using BDHKE
  * 
- * @param {Buffer} Y - Point on curve corresponding to secret
- * @param {Buffer} blindingFactor - Random blinding factor
- * @returns {Buffer} Blinded message B_
+ * @param {Buffer|Uint8Array} Y - Point on curve corresponding to secret
+ * @param {Buffer|Uint8Array} blindingFactor - Random blinding factor
+ * @returns {Uint8Array} Blinded message B_
  */
 function blindMessage(Y, blindingFactor) {
   try {
-    // Ensure Y is a valid public key (convert to Uint8Array if needed)
-    const Y_uint8 = Uint8Array.from(Y);
+    // Use the helper to ensure uniform type handling
+    const Y_uint8 = toUint8Array(Y);
+    const blindingFactor_uint8 = toUint8Array(blindingFactor);
+    
+    // Verify the public key is valid
     if (!secp256k1.publicKeyVerify(Y_uint8)) {
       throw new Error('Invalid point Y');
     }
     
-    // Ensure blinding factor is a valid scalar (convert to Uint8Array if needed)
-    const blindingFactor_uint8 = Uint8Array.from(blindingFactor);
+    // Verify the private key (blinding factor) is valid
     if (!secp256k1.privateKeyVerify(blindingFactor_uint8)) {
       throw new Error('Invalid blinding factor');
     }
@@ -154,40 +187,21 @@ function blindMessage(Y, blindingFactor) {
 /**
  * Sign a blinded message using BDHKE
  * 
- * @param {Buffer} B_ - Blinded message
- * @param {Buffer} k - Private key
- * @returns {Buffer} Blind signature C_
+ * @param {Buffer|Uint8Array} B_ - Blinded message
+ * @param {Buffer|Uint8Array} k - Private key
+ * @returns {Uint8Array} Blind signature C_
  */
 function signBlindedMessage(B_, k) {
   try {
-    // Add detailed debugging of inputs
-    logger.info({
-      B_type: typeof B_,
-      B_isArray: Array.isArray(B_),
-      B_isUint8Array: B_ instanceof Uint8Array,
-      B_isBuffer: Buffer.isBuffer(B_),
-      B_length: B_ ? B_.length : 'undefined',
-      k_type: typeof k,
-      k_isArray: Array.isArray(k),
-      k_isUint8Array: k instanceof Uint8Array,
-      k_isBuffer: Buffer.isBuffer(k),
-      k_length: k ? k.length : 'undefined'
-    }, 'signBlindedMessage input debug');
+    // Convert inputs to Uint8Array using our helper
+    const B_uint8 = toUint8Array(B_);
+    const k_uint8 = toUint8Array(k);
     
-    // Ensure inputs are Uint8Array for secp256k1 compatibility
-    const B_uint8 = B_ instanceof Uint8Array ? B_ : Uint8Array.from(B_);
-    const k_uint8 = k instanceof Uint8Array ? k : Uint8Array.from(k);
-    
-    // Additional debugging after conversion
-    logger.info({
-      B_uint8_type: typeof B_uint8,
-      B_uint8_isArray: Array.isArray(B_uint8),
-      B_uint8_isUint8Array: B_uint8 instanceof Uint8Array,
+    // Log for debugging
+    logger.debug({
       B_uint8_length: B_uint8.length,
-      k_uint8_type: typeof k_uint8,
-      k_uint8_isUint8Array: k_uint8 instanceof Uint8Array,
-      k_uint8_length: k_uint8.length
-    }, 'After conversion to Uint8Array');
+      k_uint8_length: k_uint8.length,
+    }, 'Sign blinded message inputs');
     
     // Ensure B_ is a valid point
     if (!secp256k1.publicKeyVerify(B_uint8)) {
@@ -217,27 +231,29 @@ function signBlindedMessage(B_, k) {
 /**
  * Unblind a blind signature
  * 
- * @param {Buffer} C_ - Blind signature
- * @param {Buffer} blindingFactor - Blinding factor used to blind the message
- * @param {Buffer} K - Public key corresponding to private key k
- * @returns {Buffer} Unblinded signature C
+ * @param {Buffer|Uint8Array} C_ - Blind signature
+ * @param {Buffer|Uint8Array} blindingFactor - Blinding factor used to blind the message
+ * @param {Buffer|Uint8Array} K - Public key corresponding to private key k
+ * @returns {Uint8Array} Unblinded signature C
  */
 function unblindSignature(C_, blindingFactor, K) {
   try {
-    // Ensure C_ is a valid point (convert to Uint8Array if needed)
-    const C_uint8 = Uint8Array.from(C_);
+    // Convert all inputs to Uint8Array using our helper
+    const C_uint8 = toUint8Array(C_);
+    const blindingFactor_uint8 = toUint8Array(blindingFactor);
+    const K_uint8 = toUint8Array(K);
+    
+    // Ensure C_ is a valid point
     if (!secp256k1.publicKeyVerify(C_uint8)) {
       throw new Error('Invalid blind signature C_');
     }
     
-    // Ensure blinding factor is a valid scalar (convert to Uint8Array if needed)
-    const blindingFactor_uint8 = Uint8Array.from(blindingFactor);
+    // Ensure blinding factor is a valid scalar
     if (!secp256k1.privateKeyVerify(blindingFactor_uint8)) {
       throw new Error('Invalid blinding factor');
     }
     
-    // Ensure K is a valid point (convert to Uint8Array if needed)
-    const K_uint8 = Uint8Array.from(K);
+    // Ensure K is a valid point
     if (!secp256k1.publicKeyVerify(K_uint8)) {
       throw new Error('Invalid public key K');
     }
@@ -268,8 +284,8 @@ function unblindSignature(C_, blindingFactor, K) {
  * Verify a signature
  * 
  * @param {string} secret - Original secret message
- * @param {Buffer} C - Signature to verify
- * @param {Buffer} k - Private key
+ * @param {Buffer|Uint8Array} C - Signature to verify
+ * @param {Buffer|Uint8Array} k - Private key
  * @returns {boolean} True if signature is valid
  */
 function verifySignature(secret, C, k) {
@@ -277,19 +293,18 @@ function verifySignature(secret, C, k) {
     // Map secret to curve point
     const Y = hashToCurve(secret);
     
-    // Convert inputs to Uint8Array for the secp256k1 library
-    const Y_uint8 = Uint8Array.from(Y);
-    const k_uint8 = Uint8Array.from(k);
-    const C_uint8 = Uint8Array.from(C);
+    // Convert inputs to Uint8Array using our helper
+    const C_uint8 = toUint8Array(C);
+    const k_uint8 = toUint8Array(k);
     
     // Calculate expected signature kY
-    const expectedC = secp256k1.publicKeyTweakMul(Y_uint8, k_uint8);
+    const expectedC = secp256k1.publicKeyTweakMul(Y, k_uint8);
     
     // Compare signatures (must compare hex strings as Buffer comparison is reference-based)
     const isValid = Buffer.from(C_uint8).toString('hex') === Buffer.from(expectedC).toString('hex');
     
     logger.debug({
-      YPrefix: Buffer.from(Y_uint8).slice(0, 5).toString('hex'),
+      YPrefix: Buffer.from(Y).slice(0, 5).toString('hex'),
       CPrefix: Buffer.from(C_uint8).slice(0, 5).toString('hex'),
       expectedCPrefix: Buffer.from(expectedC).slice(0, 5).toString('hex'),
       isValid
@@ -352,11 +367,10 @@ function createTokenRequest(keysetId) {
  */
 function processSignedToken(tokenRequest, blindSignature, publicKey) {
   try {
-    // Decode blind signature and blinding factor
-    // Convert all inputs to Uint8Array for secp256k1 compatibility
-    const C_ = Uint8Array.from(Buffer.from(blindSignature, 'hex'));
-    const blindingFactor = Uint8Array.from(Buffer.from(tokenRequest.blindingFactor, 'hex'));
-    const K = Uint8Array.from(Buffer.from(publicKey, 'hex'));
+    // Convert inputs to Uint8Array using our helper
+    const C_ = toUint8Array(blindSignature, 'hex');
+    const blindingFactor = toUint8Array(tokenRequest.blindingFactor, 'hex');
+    const K = toUint8Array(publicKey, 'hex');
     
     // Unblind the signature
     const C = unblindSignature(C_, blindingFactor, K);
@@ -364,7 +378,7 @@ function processSignedToken(tokenRequest, blindSignature, publicKey) {
     // Verify signature correctness
     // Note: Full verification requires the private key, which we don't have on the client side
     // This is just a basic structure check
-    if (!secp256k1.publicKeyVerify(Uint8Array.from(C))) {
+    if (!secp256k1.publicKeyVerify(C)) {
       throw new Error('Invalid unblinded signature structure');
     }
     
@@ -372,7 +386,7 @@ function processSignedToken(tokenRequest, blindSignature, publicKey) {
     return {
       id: tokenRequest.id,
       secret: tokenRequest.secret,
-      signature: C.toString('hex'),
+      signature: Buffer.from(C).toString('hex'),
       keysetId: tokenRequest.keysetId
     };
   } catch (error) {
