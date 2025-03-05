@@ -160,9 +160,34 @@ function blindMessage(Y, blindingFactor) {
  */
 function signBlindedMessage(B_, k) {
   try {
+    // Add detailed debugging of inputs
+    logger.info({
+      B_type: typeof B_,
+      B_isArray: Array.isArray(B_),
+      B_isUint8Array: B_ instanceof Uint8Array,
+      B_isBuffer: Buffer.isBuffer(B_),
+      B_length: B_ ? B_.length : 'undefined',
+      k_type: typeof k,
+      k_isArray: Array.isArray(k),
+      k_isUint8Array: k instanceof Uint8Array,
+      k_isBuffer: Buffer.isBuffer(k),
+      k_length: k ? k.length : 'undefined'
+    }, 'signBlindedMessage input debug');
+    
     // Ensure inputs are Uint8Array for secp256k1 compatibility
     const B_uint8 = B_ instanceof Uint8Array ? B_ : Uint8Array.from(B_);
     const k_uint8 = k instanceof Uint8Array ? k : Uint8Array.from(k);
+    
+    // Additional debugging after conversion
+    logger.info({
+      B_uint8_type: typeof B_uint8,
+      B_uint8_isArray: Array.isArray(B_uint8),
+      B_uint8_isUint8Array: B_uint8 instanceof Uint8Array,
+      B_uint8_length: B_uint8.length,
+      k_uint8_type: typeof k_uint8,
+      k_uint8_isUint8Array: k_uint8 instanceof Uint8Array,
+      k_uint8_length: k_uint8.length
+    }, 'After conversion to Uint8Array');
     
     // Ensure B_ is a valid point
     if (!secp256k1.publicKeyVerify(B_uint8)) {
@@ -290,6 +315,16 @@ function createTokenRequest(keysetId) {
     
     // Extract Y point from secret
     const Y = hashToCurve(token.secret);
+    
+    // Add debug logging
+    logger.info({
+      YType: typeof Y,
+      YIsUint8Array: Y instanceof Uint8Array,
+      YLength: Y ? Y.length : 'undefined',
+      blindingFactorType: typeof token.blindingFactor,
+      blindingFactorIsBuffer: Buffer.isBuffer(token.blindingFactor),
+      blindingFactorLength: token.blindingFactor ? token.blindingFactor.length : 'undefined'
+    }, 'Debug before blindMessage');
     
     // Blind the message
     const B_ = blindMessage(Y, token.blindingFactor);

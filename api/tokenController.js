@@ -2016,6 +2016,18 @@ async function createECToken(req, res) {
           // Sign the blinded message
           // Convert the blinded message from hex string to Uint8Array for the secp256k1 library
           const blindedMessage = Uint8Array.from(Buffer.from(tokenRequest.blindedMessage, 'hex'));
+          
+          // Add detailed debugging
+          logger.info({
+            blindedMessageType: typeof blindedMessage,
+            blindedMessageIsArray: Array.isArray(blindedMessage),
+            blindedMessageIsUint8Array: blindedMessage instanceof Uint8Array,
+            blindedMessageLength: blindedMessage.length,
+            privateKeyType: typeof privateKey,
+            privateKeyIsUint8Array: privateKey instanceof Uint8Array,
+            privateKeyLength: privateKey.length
+          }, 'Debug info before signing');
+          
           const signature = blindSignature.signBlindedMessage(blindedMessage, privateKey);
           
           logger.debug(`Signed EC token request with ID: ${tokenRequest.id}`);
