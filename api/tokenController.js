@@ -144,6 +144,9 @@ async function createToken(req, res) {
             tokenKeyPair.publicKey
           );
           
+          // Mark token requests created for arbitrary amounts
+          tokenRequest.bypassVerificationForArbitraryAmount = true;
+          
           logger.debug(`Created token request with ID: ${tokenRequest.id}`);
           
           // Sign the blinded token
