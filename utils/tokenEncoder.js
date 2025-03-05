@@ -64,7 +64,7 @@ function encodeToken(token, customPrefix) {
  */
 async function bundleTokens(tokens, customPrefix) {
   try {
-    // Import CBOR - using existing package
+    // Import CBOR - required for Cashu compatibility
     const cbor = require('cbor');
     
     if (!Array.isArray(tokens)) {
@@ -80,12 +80,9 @@ async function bundleTokens(tokens, customPrefix) {
       return tokens[0];
     }
     
-    logger.debug(`Bundling ${tokens.length} tokens using CBOR format (Cashu-style)`);
+    logger.debug(`Bundling ${tokens.length} tokens using Cashu TokenV4 format`);
     
-    // We'll create a structure that exactly matches Cashu's TokenV4 format
-    // The main difference is how tokens are organized - Cashu first groups by mint
-    
-    // First decode all tokens to extract their data
+    // First decode all tokens to extract their data for bundling
     const decodedTokens = [];
     for (const token of tokens) {
       try {
@@ -122,14 +119,12 @@ async function bundleTokens(tokens, customPrefix) {
         // Parse the data field to get the ID
         const dataObj = JSON.parse(tokenObject.data);
         
-        // Add to decoded tokens
+        // Add to decoded tokens array
         decodedTokens.push({
-          secretId: dataObj.id,
-          signature: tokenObject.signature,
-          keyId: tokenObject.key_id,
-          // Try to determine amount from the token if possible
-          // Default to 1 since we don't know actual amount
-          amount: 1
+          id: dataObj.id,                    // Secret ID
+          signature: tokenObject.signature,  // Signature in base64 
+          keyId: tokenObject.key_id,         // Key ID
+          amount: 1                          // Default amount, normally determined by denomination
         });
       } catch (err) {
         logger.warn({ error: err, token: token.substring(0, 40) + '...' }, 
@@ -137,38 +132,57 @@ async function bundleTokens(tokens, customPrefix) {
       }
     }
     
-    logger.debug(`Successfully decoded ${decodedTokens.length} tokens`);
+    // Group tokens by keyId (same as Cashu TokenV4 groups by keyset ID)
+    // Keyset ID is the "i" field in Cashu TokenV4Token
+    const tokensByKeyId = {};
+    for (const token of decodedTokens) {
+      if (!tokensByKeyId[token.keyId]) {
+        tokensByKeyId[token.keyId] = [];
+      }
+      tokensByKeyId[token.keyId].push(token);
+    }
     
-    // Now construct the exact Cashu TokenV4 format
-    // In Cashu, tokens are first grouped by mint, with each mint having a list of proofs
-    // Since we have a single mint, we'll put all tokens under one mint
+    // Construct exact Cashu TokenV4 format:
+    // {
+    //   m: "mint_url",          // Mint URL
+    //   u: "sat",               // Unit (sat, msat, etc)
+    //   t: [                    // Array of TokenV4Token objects
+    //     {
+    //       i: bytes(keyset_id),   // keyset ID as bytes
+    //       p: [                   // Array of proofs for this keyset 
+    //         {
+    //           a: 1,              // Amount
+    //           s: "secret_id",    // Secret ID as string
+    //           c: bytes(signature) // Signature as bytes
+    //         }
+    //       ]
+    //     }
+    //   ]
+    // }
     
-    // Create our token structure
     const tokenV4 = {
-      // Top level array of tokens grouped by mint
-      t: [
-        {
-          // Optional mint URL - This is our mint identifier
-          m: "Giftmint Server",
-          // Array of proofs for this mint
-          p: decodedTokens.map(token => ({
-            // Secret as string
-            s: token.secretId,
-            // Amount as integer
-            a: token.amount,
-            // Signature as binary
-            c: Buffer.from(token.signature, 'base64'),
-            // Optional key ID as binary - not required in all cases by Cashu
-            i: Buffer.from(token.keyId)
-          }))
-        }
-      ],
-      // Optional unit (used in our unbundling code)
-      u: "sat"
+      // Mint URL (optional in Cashu)
+      m: "Giftmint Server",
+      // Unit (required in Cashu)
+      u: "sat",
+      // Tokens array grouped by keyset ID
+      t: Object.keys(tokensByKeyId).map(keyId => ({
+        // Keyset ID as bytes (using Buffer)
+        i: Buffer.from(keyId, 'utf8'),
+        // Proofs array for this keyset
+        p: tokensByKeyId[keyId].map(token => ({
+          // Amount (integer)
+          a: token.amount,
+          // Secret (string)
+          s: token.id,
+          // Signature (bytes)
+          c: Buffer.from(token.signature, 'base64')
+        }))
+      }))
     };
     
-    // If we have no tokens, add a dummy token to ensure the bundle is valid
-    if (decodedTokens.length === 0 && tokens.length > 0) {
+    // If no tokens were successfully decoded, add a fallback token
+    if (Object.keys(tokensByKeyId).length === 0 && tokens.length > 0) {
       logger.warn('No tokens could be properly decoded, adding fallback token');
       try {
         // Use first token as fallback
@@ -180,52 +194,55 @@ async function bundleTokens(tokens, customPrefix) {
         let standardBase64 = base64Token
           .replace(/-/g, '+')
           .replace(/_/g, '/');
-        // Add padding  
         while (standardBase64.length % 4) standardBase64 += '=';
         
-        // Try to decode
+        // Decode the token
         const tokenBuffer = Buffer.from(standardBase64, 'base64');
         const tokenObject = JSON.parse(tokenBuffer.toString());
         const dataObj = JSON.parse(tokenObject.data);
         
-        // Add a direct reference to first token
-        tokenV4.t[0].p.push({
-          s: dataObj.id,
-          a: 1000, // Fallback amount
-          c: Buffer.from(tokenObject.signature, 'base64'),
-          i: Buffer.from(tokenObject.key_id)
+        // Add a single token with this keyset
+        tokenV4.t.push({
+          i: Buffer.from(tokenObject.key_id, 'utf8'),
+          p: [{
+            a: 1, // Default amount
+            s: dataObj.id,
+            c: Buffer.from(tokenObject.signature, 'base64')
+          }]
         });
         
-        logger.info('Added direct token reference as fallback');
+        logger.info('Added fallback token from first token');
       } catch (err) {
         logger.warn({ error: err }, 'Failed to add fallback token, using dummy data');
         
         // Last resort - completely dummy data
-        tokenV4.t[0].p.push({
-          s: "dummy-secret-" + Date.now(),
-          a: 1000,
-          c: Buffer.from("dummy-signature"),
-          i: Buffer.from("dummy-key-id")
+        tokenV4.t.push({
+          i: Buffer.from("fallback-key-id"),
+          p: [{
+            a: 1,
+            s: "fallback-secret-" + Date.now(),
+            c: Buffer.from("fallback-signature")
+          }]
         });
       }
     }
     
     logger.debug({
-      mintCount: tokenV4.t.length,
-      proofCount: tokenV4.t[0].p.length,
+      keysetCount: tokenV4.t.length,
+      proofCount: tokenV4.t.reduce((sum, t) => sum + t.p.length, 0),
       format: 'Cashu TokenV4'
-    }, 'Created CBOR bundle structure');
+    }, 'Created Cashu-compatible token structure');
     
-    // Encode using CBOR - match Cashu's format exactly
+    // Encode using CBOR
     const cborData = cbor.encode(tokenV4);
     
-    // Convert to URL-safe base64
+    // Convert to URL-safe base64 (just like Cashu)
     const base64Bundle = cborData.toString('base64')
       .replace(/\+/g, '-')
       .replace(/\//g, '_')
       .replace(/=/g, '');
     
-    // Add prefix with 'B' marker just like Cashu
+    // Add prefix with 'B' marker (matching Cashu TokenV4 format)
     const prefix = getTokenPrefix(customPrefix);
     return `${prefix}B${base64Bundle}`;
   } catch (error) {
@@ -495,96 +512,179 @@ function unbundleTokens(bundleString) {
             const prefix = bundleString.substring(0, prefixEnd);
             const recreatedTokens = [];
             
-            // For Cashu TokenV4 format, the structure is:
-            // { t: [{ m: "mint-info", p: [{ s: "secret", a: amount, c: Buffer(signature), i: Buffer(key-id) }] }] }
-            // Process each token based on this structure
+            // Inspect the CBOR bundle structure to determine its format
+            // Try to handle all the variants we've seen from Cashu tokens
+
+            // Process tokens from the CBOR bundle based on its structure
+            // There are several possible structures we need to handle:
+            // 1. Cashu TokenV4: { t: [{ i: bytesX, p: [{s: "secret", a: amount, c: bytes(signature)}] }], m: "mint_url", u: "unit" }
+            // 2. Simple tokens: { t: [{s: "secret", c: bytes(signature)}], m: "mint_url" }
+            // 3. Legacy: tokens with non-standard structure - handle case by case
+
             if (cborBundle.t && Array.isArray(cborBundle.t)) {
-              for (const mintGroup of cborBundle.t) {
-                // Get proofs from this mint
-                if (mintGroup.p && Array.isArray(mintGroup.p)) {
-                  // Process each proof
-                  for (const proof of mintGroup.p) {
-                    try {
-                      // Extract the token data - handle different formats
-                      const secretId = proof.s;
-                      
-                      // Handle sig as buffer or string
-                      const signature = Buffer.isBuffer(proof.c) 
-                        ? proof.c.toString('base64')
-                        : proof.c;
-                      
-                      // Handle key_id as buffer or string
-                      const keyId = proof.i
-                        ? (Buffer.isBuffer(proof.i) ? proof.i.toString() : proof.i)
-                        : 'unknown-key-id';
-                      
-                      // Recreate token in our format
-                      const tokenData = JSON.stringify({ id: secretId });
-                      const fullToken = {
-                        data: tokenData,
-                        signature: signature,
-                        key_id: keyId
-                      };
-                      
-                      // Encode it back to compact format
-                      const encodedToken = encodeToken(fullToken, prefix);
-                      recreatedTokens.push(encodedToken);
-                      
-                      logger.debug(`Extracted token with secret ID: ${secretId.substring(0, 8)}...`);
-                    } catch (proofError) {
-                      logger.warn({ error: proofError }, 'Failed to process proof in CBOR bundle');
+              logger.debug({
+                bundleStructure: 'Has t array', 
+                arrayLength: cborBundle.t.length,
+                firstItem: cborBundle.t.length > 0 ? 
+                  JSON.stringify(cborBundle.t[0]).substring(0,100) : 'empty'
+              }, 'CBOR bundle structure info');
+
+              // Check for Cashu TokenV4 format - Keys grouped by keyset ID
+              if (cborBundle.t.length > 0 && cborBundle.t[0].i && cborBundle.t[0].p) {
+                logger.debug('Processing Cashu TokenV4 format (grouped by keyset ID)');
+                
+                // Loop through each keyset group
+                for (const group of cborBundle.t) {
+                  try {
+                    // Get keyset ID
+                    const keyId = Buffer.isBuffer(group.i) 
+                      ? group.i.toString() 
+                      : (typeof group.i === 'string' ? group.i : 'unknown-key-id');
+                    
+                    // Process proofs for this keyset
+                    if (group.p && Array.isArray(group.p)) {
+                      for (const proof of group.p) {
+                        try {
+                          // Extract secret ID (string)
+                          const secretId = proof.s;
+                          
+                          // Handle signature (could be Buffer or string)
+                          let signature;
+                          if (Buffer.isBuffer(proof.c)) {
+                            signature = proof.c.toString('base64');
+                          } else if (typeof proof.c === 'string') {
+                            signature = proof.c;
+                          } else {
+                            logger.warn('Unexpected signature format in proof');
+                            continue;
+                          }
+                          
+                          // Create token in our format
+                          const tokenData = JSON.stringify({ id: secretId });
+                          const fullToken = {
+                            data: tokenData,
+                            signature: signature,
+                            key_id: keyId
+                          };
+                          
+                          // Encode token
+                          const encodedToken = encodeToken(fullToken, prefix);
+                          recreatedTokens.push(encodedToken);
+                          
+                          logger.debug(`Extracted token from Cashu V4 format with secret ID: ${secretId.substring(0, 8)}...`);
+                        } catch (proofError) {
+                          logger.warn({ error: proofError }, 'Failed to process V4 proof');
+                        }
+                      }
+                    }
+                  } catch (groupError) {
+                    logger.warn({ error: groupError }, 'Failed to process token group');
+                  }
+                }
+              }
+              // Check for Cashu mint-grouped format - Tokens grouped by mint
+              else if (cborBundle.t.length > 0 && cborBundle.t[0].m && cborBundle.t[0].p) {
+                logger.debug('Processing Cashu format (grouped by mint)');
+                
+                // Process each mint group
+                for (const mintGroup of cborBundle.t) {
+                  // Process proofs in this mint
+                  if (mintGroup.p && Array.isArray(mintGroup.p)) {
+                    for (const proof of mintGroup.p) {
+                      try {
+                        // Extract secret
+                        const secretId = proof.s;
+                        
+                        // Handle signature (could be Buffer or string)
+                        let signature;
+                        if (Buffer.isBuffer(proof.c)) {
+                          signature = proof.c.toString('base64');
+                        } else if (typeof proof.c === 'string') {
+                          signature = proof.c;
+                        } else {
+                          logger.warn('Unexpected signature format in mint-group proof');
+                          continue;
+                        }
+                        
+                        // Handle key ID (could be in proof.i or use a default)
+                        const keyId = proof.i
+                          ? (Buffer.isBuffer(proof.i) ? proof.i.toString() : proof.i)
+                          : 'unknown-key-id';
+                        
+                        // Create token
+                        const tokenData = JSON.stringify({ id: secretId });
+                        const fullToken = {
+                          data: tokenData,
+                          signature: signature,
+                          key_id: keyId
+                        };
+                        
+                        // Encode token
+                        const encodedToken = encodeToken(fullToken, prefix);
+                        recreatedTokens.push(encodedToken);
+                        
+                        logger.debug(`Extracted token from mint-grouped format with secret ID: ${secretId.substring(0, 8)}...`);
+                      } catch (proofError) {
+                        logger.warn({ error: proofError }, 'Failed to process mint-grouped proof');
+                      }
                     }
                   }
                 }
               }
-            } 
-            // For our older format, structure is:
-            // { t: [{ i: Buffer(key-id), p: [{ s: "secret", c: Buffer(signature), a: amount }] }] }
-            else if (cborBundle.t && Array.isArray(cborBundle.t) && cborBundle.t.length > 0 &&
-                    cborBundle.t[0].i && cborBundle.t[0].p) {
-              // Process our older format
-              logger.debug('Processing older CBOR format with key_id grouping');
-              
-              for (const group of cborBundle.t) {
-                // Get key_id for this group
-                const keyId = Buffer.isBuffer(group.i) 
-                  ? group.i.toString()
-                  : group.i;
+              // Flat array of proofs/tokens
+              else if (cborBundle.t.length > 0 && (cborBundle.t[0].s || cborBundle.t[0].secret)) {
+                logger.debug('Processing flat array of tokens');
                 
-                // Process each proof in this group
-                if (group.p && Array.isArray(group.p)) {
-                  for (const proof of group.p) {
-                    try {
-                      const secretId = proof.s;
-                      const signature = Buffer.isBuffer(proof.c)
-                        ? proof.c.toString('base64')
-                        : proof.c;
-                      
-                      // Recreate token data
-                      const tokenData = JSON.stringify({ id: secretId });
-                      
-                      // Recreate full token
-                      const fullToken = {
-                        data: tokenData,
-                        signature: signature,
-                        key_id: keyId
-                      };
-                      
-                      // Encode it back to compact format with proper prefix
-                      const encodedToken = encodeToken(fullToken, prefix);
-                      recreatedTokens.push(encodedToken);
-                    } catch (proofError) {
-                      logger.warn({ error: proofError }, 'Failed to process proof in older CBOR format');
+                // Process each token directly
+                for (const token of cborBundle.t) {
+                  try {
+                    // Extract secret (could be .s or .secret)
+                    const secretId = token.s || token.secret;
+                    
+                    // Handle signature (could be .c, .C, or .signature)
+                    let signature;
+                    if (token.c) {
+                      signature = Buffer.isBuffer(token.c) ? token.c.toString('base64') : token.c;
+                    } else if (token.C) {
+                      signature = Buffer.isBuffer(token.C) ? token.C.toString('base64') : token.C;
+                    } else if (token.signature) {
+                      signature = Buffer.isBuffer(token.signature) ? token.signature.toString('base64') : token.signature;
+                    } else {
+                      logger.warn('Missing signature in flat token array');
+                      continue;
                     }
+                    
+                    // Handle key ID (could be .i, .id, .key_id, etc.)
+                    const keyId = token.i || token.id || token.key_id || 'unknown-key-id';
+                    
+                    // Create token
+                    const tokenData = JSON.stringify({ id: secretId });
+                    const fullToken = {
+                      data: tokenData,
+                      signature: signature,
+                      key_id: keyId
+                    };
+                    
+                    // Encode token
+                    const encodedToken = encodeToken(fullToken, prefix);
+                    recreatedTokens.push(encodedToken);
+                    
+                    logger.debug(`Extracted token from flat array with secret ID: ${secretId.substring(0, 8)}...`);
+                  } catch (tokenError) {
+                    logger.warn({ error: tokenError }, 'Failed to process flat token');
                   }
                 }
+              } 
+              else {
+                // Unknown format
+                logger.warn({
+                  bundleStructure: JSON.stringify(cborBundle).substring(0, 200),
+                  hasTokens: !!cborBundle.t,
+                  tokenCount: cborBundle.t ? cborBundle.t.length : 0
+                }, 'Unknown or unsupported CBOR bundle structure');
               }
             } else {
-              logger.warn({
-                hasTokens: !!cborBundle.t,
-                isTokensArray: Array.isArray(cborBundle.t),
-                tokenCount: cborBundle.t ? cborBundle.t.length : 0
-              }, 'Unknown CBOR bundle structure');
+              logger.warn('CBOR bundle missing tokens array (t)');
             }
             
             logger.debug(`Extracted ${recreatedTokens.length} tokens from CBOR bundle`);
