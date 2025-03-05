@@ -970,7 +970,7 @@ async function redeemToken(req, res) {
     }
     
     // Parse token data
-    let tokenData;
+    try {
       tokenData = JSON.parse(data);
     } catch (e) {
       return res.status(400).json({
@@ -1150,8 +1150,8 @@ async function remintToken(req, res) {
     }
     
     // Parse token data
-    let tokenData;
     try {
+      tokenData = JSON.parse(data);
     } catch (e) {
       return res.status(400).json({
         success: false,
@@ -1600,9 +1600,9 @@ async function splitTokenImplementation(req, res) {
     }
     
     // Parse token data
-    let tokenData;
     try {
       tokenData = JSON.parse(data);
+    } catch (e) {
       return res.status(400).json({
         success: false,
         message: 'Invalid token data'
@@ -2450,10 +2450,10 @@ async function verifyECToken(req, res) {
     }
     
     // Parse token data
-    let tokenData;
     try {
       tokenData = JSON.parse(data);
     } catch (e) {
+      return res.status(400).json({
         success: false,
         message: 'Invalid EC token data'
       });
@@ -2753,11 +2753,11 @@ async function redeemECToken(req, res) {
     }
     
     // Parse token data
-    let tokenData;
     try {
       tokenData = JSON.parse(data);
     } catch (e) {
       return res.status(400).json({
+        success: false,
         message: 'Invalid EC token data'
       });
     }
