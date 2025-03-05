@@ -668,6 +668,16 @@ function unbundleTokens(bundleString) {
                           
                           // Encode token
                           const encodedToken = encodeToken(fullToken, prefix);
+                          
+                          // Log detailed token info
+                          logger.debug({
+                            secretId: secretId.substring(0, 8),
+                            keyId: keyId.substring(0, 8),
+                            signatureLength: signature.length,
+                            encodedTokenLength: encodedToken.length,
+                            encodedTokenPrefix: encodedToken.substring(0, 20)
+                          }, 'Created decoded token');
+                          
                           recreatedTokens.push(encodedToken);
                           
                           logger.debug(`Extracted token from Cashu V4 format with secret ID: ${secretId.substring(0, 8)}...`);
@@ -799,13 +809,23 @@ function unbundleTokens(bundleString) {
             }, 'Returning raw CBOR structure for verification');
             
             // Return the raw CBOR bundle structure AND the decoded tokens
+            // Make sure we have all the tokens
+            logger.debug({
+              recreatedTokensCount: recreatedTokens.length,
+              firstTokenPrefix: recreatedTokens.length > 0 ? recreatedTokens[0].substring(0, 20) : 'none',
+              rawGroupsCount: cborBundle.t ? cborBundle.t.length : 0
+            }, 'Preparing final unbundled token result');
+            
             return {
               v: 4, // CBOR format version
               t: cborBundle.t, // Return the raw structure with groups
               raw_structure: true, // Mark that we're returning raw structure
               decoded_tokens: recreatedTokens, // Also include decoded tokens as a backup
               c: recreatedTokens.length,
-              format: 'cbor'
+              format: 'cbor',
+              // Add token counts for debugging
+              total_proofs_in_structure: cborBundle.t ? 
+                cborBundle.t.reduce((sum, group) => sum + (group.p ? group.p.length : 0), 0) : 0
             };
           } catch (cborDecodeError) {
             // Enhanced error handling with hexdump of the first few bytes for debugging

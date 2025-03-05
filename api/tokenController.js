@@ -449,10 +449,14 @@ async function verifyToken(req, res) {
           // Check if this is a raw CBOR structure with nested proofs
           const isRawStructure = unbundled.raw_structure === true;
           
+          // Check if we have decoded tokens to use directly
+          const hasDecodedTokens = !!unbundled.decoded_tokens && Array.isArray(unbundled.decoded_tokens) && unbundled.decoded_tokens.length > 0;
+          
           logger.debug({
             elementsCount: unbundled.t.length,
             isRawStructure: isRawStructure,
-            hasDecodedTokens: !!unbundled.decoded_tokens
+            hasDecodedTokens: hasDecodedTokens,
+            decodedTokensCount: hasDecodedTokens ? unbundled.decoded_tokens.length : 0
           }, 'Analyzing unbundled token structure');
           
           // Verify each token in the bundle
@@ -496,87 +500,123 @@ async function verifyToken(req, res) {
             }, 'First token group analysis');
           }
           
-          // Process all tokens, handling different structures
-          for (const item of unbundled.t) {
-            try {
-              // Check if this is a direct token string
-              if (typeof item === 'string') {
-                logger.debug('Processing direct token string');
-                await verifyAndAddSingleToken(item, results, totalValue);
-              } 
-              // Check if this is a wrapped token with multiple proofs
-              else if (item && Array.isArray(item.p)) {
-                logger.debug(`Processing token group with ${item.p.length} proofs`);
-                
-                // Process each proof in this group
-                for (const proof of item.p) {
-                  try {
-                    // Determine if we have needed data to make this into a token
-                    if (!proof || !proof.s) {
-                      logger.warn('Proof missing required data, skipping');
-                      continue;
-                    }
-                    
-                    logger.debug(`Verifying proof for secret: ${proof.s.substring(0, 8)}...`);
-                    
-                    // Get key ID from parent or proof
-                    const keyId = (item.i && Buffer.isBuffer(item.i)) ? 
-                      item.i.toString() : 
-                      (typeof item.i === 'string' ? item.i : 'unknown-key-id');
-                    
-                    // Get signature from proof
-                    // Handle signature properly - ensure consistent base64 format
-                    let signature;
-                    if (Buffer.isBuffer(proof.c)) {
-                      signature = proof.c.toString('base64');
-                    } else if (typeof proof.c === 'string') {
-                      signature = proof.c;
-                    } else {
-                      logger.warn({
-                        proofType: typeof proof.c,
-                        secretId: proof.s.substring(0, 8)
-                      }, 'Unexpected signature format in proof');
-                      continue;
-                    }
-                    
-                    logger.debug({
-                      signature_type: typeof signature,
-                      signature_length: signature.length,
-                      signature_prefix: signature.substring(0, 10)
-                    }, 'Extracted signature from proof');
-                    
-                    // Create token data
-                    const data = JSON.stringify({ id: proof.s });
-                    
-                    // Verify this token
-                    await verifyAndAddTokenComponents(
-                      data, signature, keyId, 
-                      results, totalValue
-                    );
-                  } catch (proofError) {
-                    logger.warn({ error: proofError }, 'Error processing proof in token group');
-                  }
-                }
-              } 
-              // Otherwise, try to parse as token
-              else {
-                logger.debug('Attempting to parse and verify as individual token');
-                await verifyAndAddSingleToken(item, results, totalValue);
+          // Check if we have directly decoded tokens - use these preferentially
+          if (hasDecodedTokens) {
+            logger.debug(`Processing ${unbundled.decoded_tokens.length} directly decoded tokens`);
+            
+            // Process each decoded token directly
+            for (const token of unbundled.decoded_tokens) {
+              try {
+                logger.debug(`Verifying decoded token: ${token.substring(0, 20)}...`);
+                await verifyAndAddSingleToken(token, results, totalValue);
+              } catch (decodedTokenError) {
+                logger.warn({ error: decodedTokenError }, 'Error processing decoded token');
+                // Continue to next token
               }
-            } catch (itemError) {
-              logger.error({ error: itemError }, 'Error processing bundle item');
-              // Continue to next token
+            }
+          } else {
+            // Process all tokens from the raw structure, handling different formats
+            logger.debug('No directly decoded tokens available, using raw CBOR structure');
+            
+            for (const item of unbundled.t) {
+              try {
+                // Check if this is a direct token string
+                if (typeof item === 'string') {
+                  logger.debug('Processing direct token string');
+                  await verifyAndAddSingleToken(item, results, totalValue);
+                } 
+                // Check if this is a wrapped token with multiple proofs
+                else if (item && Array.isArray(item.p)) {
+                  logger.debug(`Processing token group with ${item.p.length} proofs`);
+                  
+                  // Process each proof in this group
+                  for (const proof of item.p) {
+                    try {
+                      // Determine if we have needed data to make this into a token
+                      if (!proof || !proof.s) {
+                        logger.warn('Proof missing required data, skipping');
+                        continue;
+                      }
+                      
+                      logger.debug(`Verifying proof for secret: ${proof.s.substring(0, 8)}...`);
+                      
+                      // Get key ID from parent or proof
+                      const keyId = (item.i && Buffer.isBuffer(item.i)) ? 
+                        item.i.toString() : 
+                        (typeof item.i === 'string' ? item.i : 'unknown-key-id');
+                      
+                      // Get signature from proof
+                      // Handle signature properly - ensure consistent base64 format
+                      let signature;
+                      if (Buffer.isBuffer(proof.c)) {
+                        signature = proof.c.toString('base64');
+                      } else if (typeof proof.c === 'string') {
+                        signature = proof.c;
+                      } else {
+                        logger.warn({
+                          proofType: typeof proof.c,
+                          secretId: proof.s.substring(0, 8)
+                        }, 'Unexpected signature format in proof');
+                        continue;
+                      }
+                      
+                      logger.debug({
+                        signature_type: typeof signature,
+                        signature_length: signature.length,
+                        signature_prefix: signature.substring(0, 10)
+                      }, 'Extracted signature from proof');
+                      
+                      // Create token data
+                      const data = JSON.stringify({ id: proof.s });
+                      
+                      // Verify this token
+                      await verifyAndAddTokenComponents(
+                        data, signature, keyId, 
+                        results, totalValue
+                      );
+                    } catch (proofError) {
+                      logger.warn({ error: proofError }, 'Error processing proof in token group');
+                    }
+                  }
+                } 
+                // Otherwise, try to parse as token
+                else {
+                  logger.debug('Attempting to parse and verify as individual token');
+                  await verifyAndAddSingleToken(item, results, totalValue);
+                }
+              } catch (itemError) {
+                logger.error({ error: itemError }, 'Error processing bundle item');
+                // Continue to next token
+              }
             }
           }
           
           // Helper function to verify a single token string
           async function verifyAndAddSingleToken(tokenString, results, totalValue) {
             try {
+              logger.debug({ 
+                tokenPrefix: tokenString.substring(0, 20),
+                tokenLength: tokenString.length
+              }, 'Attempting to decode single token for verification');
+              
               // Parse individual token
               const parsed = decodeToken(tokenString);
               
               // Extract components and verify
               const { data, signature, key_id } = parsed;
+              
+              logger.debug({
+                dataLength: data ? data.length : 0,
+                signatureLength: signature ? signature.length : 0,
+                keyId: key_id ? key_id.substring(0, 8) : 'none',
+                hasAllComponents: !!(data && signature && key_id)
+              }, 'Decoded single token components');
+              
+              // Check if we have all components
+              if (!data || !signature || !key_id) {
+                logger.warn('Token missing required components, skipping');
+                return;
+              }
               
               // Verify components
               await verifyAndAddTokenComponents(
@@ -584,7 +624,10 @@ async function verifyToken(req, res) {
                 results, totalValue
               );
             } catch (error) {
-              logger.warn({ error }, 'Failed to verify single token');
+              logger.warn({ 
+                error,
+                tokenPrefix: tokenString ? tokenString.substring(0, 20) : 'null'
+              }, 'Failed to verify single token');
             }
           }
           
