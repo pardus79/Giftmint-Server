@@ -178,63 +178,7 @@ async function createTables() {
     logger.info('Created ec_token_stats table');
   }
   
-  // Create original RSA tables for backward compatibility
-  const hasDenominationsTable = await db.schema.hasTable('denominations');
-  if (!hasDenominationsTable) {
-    await db.schema.createTable('denominations', function(table) {
-      table.string('id').primary();
-      table.decimal('value', 15, 8).notNullable();
-      table.string('currency').notNullable();
-      table.text('description').nullable();
-      table.timestamp('created_at').defaultTo(db.fn.now());
-      table.boolean('is_active').defaultTo(true);
-    });
-    logger.info('Created denominations table');
-  }
-  
-  const hasKeyTable = await db.schema.hasTable('mint_keys');
-  if (!hasKeyTable) {
-    await db.schema.createTable('mint_keys', function(table) {
-      table.string('id').primary();
-      table.string('denomination_id').notNullable();
-      table.text('public_key').notNullable();
-      table.text('private_key').notNullable();
-      table.timestamp('created_at').defaultTo(db.fn.now());
-      table.timestamp('expires_at').notNullable();
-      table.boolean('is_active').defaultTo(true);
-      table.foreign('denomination_id').references('denominations.id');
-    });
-    logger.info('Created mint_keys table');
-  }
-  
-  // Create redeemed_tokens table that only stores redeemed tokens (for double-spend prevention)
-  const hasRedeemedTokensTable = await db.schema.hasTable('redeemed_tokens');
-  if (!hasRedeemedTokensTable) {
-    await db.schema.createTable('redeemed_tokens', function(table) {
-      table.string('id').primary(); // Token ID
-      table.string('denomination_id').notNullable(); // Link to which denomination (value) this token has
-      table.string('key_id').notNullable(); // Which specific key signed this token
-      table.timestamp('redeemed_at').defaultTo(db.fn.now());
-      table.index(['key_id']);
-      table.index(['denomination_id']);
-      table.foreign('key_id').references('mint_keys.id');
-      table.foreign('denomination_id').references('denominations.id');
-    });
-    logger.info('Created redeemed_tokens table');
-  }
-  
-  // Create token_stats table for tracking aggregate stats without storing individual tokens
-  const hasStatsTable = await db.schema.hasTable('token_stats');
-  if (!hasStatsTable) {
-    await db.schema.createTable('token_stats', function(table) {
-      table.string('denomination_id').primary();
-      table.integer('minted_count').defaultTo(0);
-      table.integer('redeemed_count').defaultTo(0);
-      table.timestamp('last_updated').defaultTo(db.fn.now());
-      table.foreign('denomination_id').references('denominations.id');
-    });
-    logger.info('Created token_stats table');
-  }
+  // No need to create RSA tables as we're using EC implementation only
   
   // Create batch stats table for tracking batch totals
   const hasBatchStatsTable = await db.schema.hasTable('batch_stats');

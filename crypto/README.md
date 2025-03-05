@@ -10,7 +10,7 @@ The Giftmint server uses elliptic curve blind signatures for secure gift certifi
 - Based on the Blind Diffie-Hellman Key Exchange (BDHKE) protocol
 - Uses the secp256k1 curve
 - Provides compact tokens with strong security properties
-- Accessible via the `/token/...` and `/ec/token/...` API endpoints
+- Accessible via the `/token/...` API endpoints
 
 ## Private Mint Implementation
 
@@ -23,18 +23,16 @@ This is a private e-cash implementation exclusively for gift certificates in our
 
 ## Advantages of EC Implementation
 
-The EC implementation offers several advantages for gift certificate operations:
+The implementation offers several advantages for gift certificate operations:
 
-- **Smaller token size**: EC-based tokens are significantly more compact than RSA-based tokens
-- **Faster signature generation**: EC operations are generally faster than RSA operations
+- **Compact token size**: EC-based tokens are significantly compact
+- **Fast signature generation**: EC operations are computationally efficient
 - **Modern cryptography**: Uses elliptic curve cryptography with strong security properties
 - **Lower QR code complexity**: Shorter tokens mean simpler QR codes that are easier to scan
 
-The RSA implementation is maintained for backward compatibility with existing tokens.
+## Implementation Details
 
-## EC Implementation Details
-
-The EC implementation uses the secp256k1 elliptic curve and follows a Blind Diffie-Hellman Key Exchange (BDHKE) protocol:
+The implementation uses the secp256k1 elliptic curve and follows a Blind Diffie-Hellman Key Exchange (BDHKE) protocol:
 
 1. The client generates a random secret and maps it to a point Y on the curve
 2. The client generates a random blinding factor and computes a blinded message B_ = Y + rG
@@ -42,11 +40,11 @@ The EC implementation uses the secp256k1 elliptic curve and follows a Blind Diff
 4. The client unblinds the signature by computing C = C_ - rK (where K is the server's public key)
 5. The resulting token consists of the secret and the signature C
 
-This provides the same security properties as RSA blind signatures but with more compact tokens, especially useful for gift certificates that need to be displayed in a limited space.
+This provides excellent security properties with compact tokens, especially useful for gift certificates that need to be displayed in a limited space.
 
 ## Database Tables
 
-The EC implementation uses its own set of database tables:
+The implementation uses these database tables:
 
 - `ec_keysets`: Stores the different denominations for gift certificate values
 - `ec_keys`: Stores the private and public keys used for signing
@@ -55,10 +53,8 @@ The EC implementation uses its own set of database tables:
 
 ## API Endpoints
 
-The EC implementation is accessible via a separate set of API endpoints:
+The implementation is accessible via these API endpoints:
 
-- `/ec/token/create`: Create new EC-based gift certificate tokens
-- `/ec/token/verify`: Verify EC-based gift certificate tokens
-- `/ec/token/redeem`: Redeem EC-based gift certificate tokens
-
-These endpoints work similarly to their RSA counterparts but use the EC implementation internally.
+- `/token/create`: Create new gift certificate tokens
+- `/token/verify`: Verify gift certificate tokens
+- `/token/redeem`: Redeem gift certificate tokens
