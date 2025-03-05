@@ -31,23 +31,69 @@ const logger = pino({
  * @returns {Uint8Array} Uint8Array representation
  */
 function toUint8Array(input, encoding = 'hex') {
-  if (input instanceof Uint8Array) {
-    return input;
+  // Catch null/undefined early
+  if (input === null || input === undefined) {
+    logger.error('Null or undefined input passed to toUint8Array');
+    throw new Error('Input to toUint8Array cannot be null or undefined');
   }
   
-  if (Buffer.isBuffer(input)) {
-    return new Uint8Array(input);
+  try {
+    // Log details about the input for debugging
+    const inputType = typeof input;
+    const isUint8Array = input instanceof Uint8Array;
+    const isBuffer = Buffer.isBuffer(input);
+    const isString = typeof input === 'string';
+    const isArray = Array.isArray(input);
+    const length = input.length !== undefined ? input.length : 'unknown';
+    
+    logger.debug({
+      inputType,
+      isUint8Array,
+      isBuffer,
+      isString,
+      isArray,
+      length,
+      sample: isString ? input.slice(0, 20) + '...' : 'not a string'
+    }, 'toUint8Array input details');
+    
+    // Handle each type
+    if (isUint8Array) {
+      return input;
+    }
+    
+    if (isBuffer) {
+      return new Uint8Array(input);
+    }
+    
+    if (isString) {
+      // Handle empty strings
+      if (input.length === 0) {
+        logger.error('Empty string passed to toUint8Array');
+        throw new Error('Empty string input to toUint8Array');
+      }
+      return new Uint8Array(Buffer.from(input, encoding));
+    }
+    
+    if (isArray) {
+      // Handle empty arrays
+      if (input.length === 0) {
+        logger.error('Empty array passed to toUint8Array');
+        throw new Error('Empty array input to toUint8Array');
+      }
+      return new Uint8Array(input);
+    }
+    
+    // If we get here, we couldn't handle the type
+    logger.error(`Cannot convert ${inputType} to Uint8Array`, { input: JSON.stringify(input) });
+    throw new Error(`Cannot convert ${inputType} to Uint8Array`);
+  } catch (error) {
+    logger.error({
+      error: error.message,
+      stack: error.stack,
+      inputType: typeof input
+    }, 'Error in toUint8Array conversion');
+    throw error;
   }
-  
-  if (typeof input === 'string') {
-    return new Uint8Array(Buffer.from(input, encoding));
-  }
-  
-  if (Array.isArray(input)) {
-    return new Uint8Array(input);
-  }
-  
-  throw new Error(`Cannot convert ${typeof input} to Uint8Array`);
 }
 
 // Domain separator for hash_to_curve (private to this implementation)
@@ -151,9 +197,40 @@ function generateToken() {
  */
 function blindMessage(Y, blindingFactor) {
   try {
+    // First make sure we have valid inputs
+    logger.debug({
+      YExists: !!Y,
+      YType: typeof Y,
+      YIsArray: Array.isArray(Y),
+      YIsUint8Array: Y instanceof Uint8Array,
+      YIsBuffer: Buffer.isBuffer(Y),
+      YLength: Y ? Y.length : 'null',
+      bfExists: !!blindingFactor,
+      bfType: typeof blindingFactor,
+      bfIsArray: Array.isArray(blindingFactor),
+      bfIsUint8Array: blindingFactor instanceof Uint8Array,
+      bfIsBuffer: Buffer.isBuffer(blindingFactor),
+      bfLength: blindingFactor ? blindingFactor.length : 'null'
+    }, 'Input validation for blindMessage');
+    
     // Use the helper to ensure uniform type handling
     const Y_uint8 = toUint8Array(Y);
     const blindingFactor_uint8 = toUint8Array(blindingFactor);
+    
+    // Additional input validation
+    if (Y_uint8.length === 0) {
+      throw new Error('Empty point Y provided to blindMessage');
+    }
+    
+    if (blindingFactor_uint8.length === 0) {
+      throw new Error('Empty blinding factor provided to blindMessage');
+    }
+    
+    // Log after conversion
+    logger.debug({
+      Y_uint8Length: Y_uint8.length,
+      blindingFactor_uint8Length: blindingFactor_uint8.length
+    }, 'After conversion to Uint8Array');
     
     // Verify the public key is valid
     if (!secp256k1.publicKeyVerify(Y_uint8)) {
@@ -171,15 +248,21 @@ function blindMessage(Y, blindingFactor) {
     // Calculate B_ = Y + rG (point addition)
     const B_ = secp256k1.publicKeyCombine([Y_uint8, rG]);
     
+    // Verify our result
+    if (!B_ || B_.length === 0) {
+      throw new Error('Generated an empty blinded message');
+    }
+    
     logger.debug({
       YPrefix: Buffer.from(Y_uint8).slice(0, 5).toString('hex'),
       rGPrefix: Buffer.from(rG).slice(0, 5).toString('hex'),
-      B_Prefix: Buffer.from(B_).slice(0, 5).toString('hex')
+      B_Prefix: Buffer.from(B_).slice(0, 5).toString('hex'),
+      B_Length: B_.length
     }, 'Blinded message');
     
     return B_;
   } catch (error) {
-    logger.error({ error }, 'Failed to blind message');
+    logger.error({ error: error.message, stack: error.stack }, 'Failed to blind message');
     throw error;
   }
 }
@@ -193,15 +276,51 @@ function blindMessage(Y, blindingFactor) {
  */
 function signBlindedMessage(B_, k) {
   try {
+    // First make sure we have valid inputs
+    logger.debug({
+      B_Exists: !!B_,
+      B_Type: typeof B_,
+      B_IsArray: Array.isArray(B_),
+      B_IsUint8Array: B_ instanceof Uint8Array,
+      B_IsBuffer: Buffer.isBuffer(B_),
+      B_Length: B_ ? B_.length : 'null',
+      B_Hex: B_ ? Buffer.from(B_).toString('hex').slice(0, 20) + '...' : 'null',
+      kExists: !!k,
+      kType: typeof k,
+      kIsArray: Array.isArray(k),
+      kIsUint8Array: k instanceof Uint8Array,
+      kIsBuffer: Buffer.isBuffer(k),
+      kLength: k ? k.length : 'null'
+    }, 'Input validation for signBlindedMessage');
+    
+    // Early validation
+    if (!B_ || (B_ instanceof Uint8Array && B_.length === 0)) {
+      throw new Error('Empty blinded message B_ provided to signBlindedMessage');
+    }
+    
+    if (!k || (k instanceof Uint8Array && k.length === 0)) {
+      throw new Error('Empty private key k provided to signBlindedMessage');
+    }
+    
     // Convert inputs to Uint8Array using our helper
     const B_uint8 = toUint8Array(B_);
     const k_uint8 = toUint8Array(k);
     
-    // Log for debugging
+    // Log after conversion
     logger.debug({
       B_uint8_length: B_uint8.length,
+      B_uint8_hex: B_uint8.length > 0 ? Buffer.from(B_uint8).toString('hex').slice(0, 20) + '...' : 'empty',
       k_uint8_length: k_uint8.length,
-    }, 'Sign blinded message inputs');
+    }, 'After conversion to Uint8Array');
+    
+    // Additional validation
+    if (B_uint8.length === 0) {
+      throw new Error('Empty blinded message after conversion');
+    }
+    
+    if (k_uint8.length === 0) {
+      throw new Error('Empty private key after conversion');
+    }
     
     // Ensure B_ is a valid point
     if (!secp256k1.publicKeyVerify(B_uint8)) {
@@ -216,14 +335,20 @@ function signBlindedMessage(B_, k) {
     // Calculate C_ = kB_ (point multiplication)
     const C_ = secp256k1.publicKeyTweakMul(B_uint8, k_uint8);
     
+    // Verify result
+    if (!C_ || C_.length === 0) {
+      throw new Error('Generated an empty signature');
+    }
+    
     logger.debug({
       B_Prefix: Buffer.from(B_uint8).slice(0, 5).toString('hex'),
-      C_Prefix: Buffer.from(C_).slice(0, 5).toString('hex')
+      C_Prefix: Buffer.from(C_).slice(0, 5).toString('hex'),
+      C_Length: C_.length
     }, 'Generated blind signature');
     
     return C_;
   } catch (error) {
-    logger.error({ error }, 'Failed to sign blinded message');
+    logger.error({ error: error.message, stack: error.stack }, 'Failed to sign blinded message');
     throw error;
   }
 }
