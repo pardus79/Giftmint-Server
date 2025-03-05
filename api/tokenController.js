@@ -72,10 +72,10 @@ async function createToken(req, res) {
         const { blindedMessage, blindingFactor } = blindSignature.blind(secret, activeKey.publicKey);
         
         // Sign with mint's private key
-        const blindSignature = await blindSignature.sign(blindedMessage, activeKey.privateKey);
+        const blindSig = await blindSignature.sign(blindedMessage, activeKey.privateKey);
         
         // Unblind signature
-        const unblindedSignature = blindSignature.unblind(blindSignature, blindingFactor, activeKey.publicKey);
+        const unblindedSignature = blindSignature.unblind(blindSig, blindingFactor, activeKey.publicKey);
         
         // Create token
         const token = tokenEncoder.encodeToken({
@@ -182,10 +182,10 @@ async function bulkCreateTokens(req, res) {
           const { blindedMessage, blindingFactor } = blindSignature.blind(secret, activeKey.publicKey);
           
           // Sign with mint's private key
-          const blindSignature = await blindSignature.sign(blindedMessage, activeKey.privateKey);
+          const blindSig = await blindSignature.sign(blindedMessage, activeKey.privateKey);
           
           // Unblind signature
-          const unblindedSignature = blindSignature.unblind(blindSignature, blindingFactor, activeKey.publicKey);
+          const unblindedSignature = blindSignature.unblind(blindSig, blindingFactor, activeKey.publicKey);
           
           // Create token
           const token = tokenEncoder.encodeToken({
@@ -637,10 +637,10 @@ async function remintToken(req, res) {
       const { blindedMessage, blindingFactor } = blindSignature.blind(secret, activeKey.publicKey);
       
       // Sign with mint's private key
-      const blindSignature = await blindSignature.sign(blindedMessage, activeKey.privateKey);
+      const blindSig = await blindSignature.sign(blindedMessage, activeKey.privateKey);
       
       // Unblind signature
-      const unblindedSignature = blindSignature.unblind(blindSignature, blindingFactor, activeKey.publicKey);
+      const unblindedSignature = blindSignature.unblind(blindSig, blindingFactor, activeKey.publicKey);
       
       // Create token
       const token = tokenEncoder.encodeToken({
@@ -833,10 +833,10 @@ async function splitToken(req, res) {
             const { blindedMessage, blindingFactor } = blindSignature.blind(secret, activeKey.publicKey);
             
             // Sign with mint's private key
-            const blindSignature = await blindSignature.sign(blindedMessage, activeKey.privateKey);
+            const blindSig = await blindSignature.sign(blindedMessage, activeKey.privateKey);
             
             // Unblind signature
-            const unblindedSignature = blindSignature.unblind(blindSignature, blindingFactor, activeKey.publicKey);
+            const unblindedSignature = blindSignature.unblind(blindSig, blindingFactor, activeKey.publicKey);
             
             // Create token
             const newToken = tokenEncoder.encodeToken({
@@ -883,10 +883,10 @@ async function splitToken(req, res) {
             const { blindedMessage, blindingFactor } = blindSignature.blind(secret, activeKey.publicKey);
             
             // Sign with mint's private key
-            const blindSignature = await blindSignature.sign(blindedMessage, activeKey.privateKey);
+            const blindSig = await blindSignature.sign(blindedMessage, activeKey.privateKey);
             
             // Unblind signature
-            const unblindedSignature = blindSignature.unblind(blindSignature, blindingFactor, activeKey.publicKey);
+            const unblindedSignature = blindSignature.unblind(blindSig, blindingFactor, activeKey.publicKey);
             
             // Create token
             const changeToken = tokenEncoder.encodeToken({
