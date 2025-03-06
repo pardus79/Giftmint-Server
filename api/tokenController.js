@@ -258,32 +258,58 @@ async function verifyToken(req, res) {
     let tokens = [];
     let isBundled = false;
     
+    // Check what kind of token we're dealing with
+    console.log(`[verifyToken] Examining token format: ${token.substring(0, 30)}...`);
+    
+    // Check if this looks like a compact bundle format (starts with prefix followed by CBOR data)
+    const isCompactFormat = token.match(/^[a-zA-Z0-9]+oWF/);
+    // Check if this looks like a standard bundle format (starts with prefix followed by base64)
+    const isStandardFormat = token.match(/^[a-zA-Z0-9]+oWZ/);
+    // Check if this looks like an individual token (contains underscore)
+    const isIndividualToken = token.includes('_');
+    
+    console.log(`[verifyToken] Token format detection: compact=${!!isCompactFormat}, standard=${!!isStandardFormat}, individual=${isIndividualToken}`);
+    
     try {
-      // Check if token has a custom prefix (e.g., btcpins)
-      const hasCustomPrefix = 
-        token.startsWith('btcpins') || 
-        token.startsWith('GM') || 
-        token.startsWith(config.token.prefix);
-      
-      console.log(`[verifyToken] Token has ${hasCustomPrefix ? 'custom prefix' : 'no prefix'}`);
-      
-      // Try compact format first as it's more likely with custom prefixes
-      try {
-        tokens = compactTokenEncoder.unbundleTokensCompact(token);
-        isBundled = true;
-        console.log(`[verifyToken] Successfully unbundled as compact format: ${tokens.length} tokens`);
-      } catch (compactError) {
-        console.log(`[verifyToken] Compact unbundling failed: ${compactError.message}`);
-        // If compact unbundling fails, try standard
+      if (isCompactFormat) {
+        console.log('[verifyToken] Trying to unbundle as compact format');
+        try {
+          tokens = compactTokenEncoder.unbundleTokensCompact(token);
+          isBundled = true;
+          console.log(`[verifyToken] Successfully unbundled as compact format: ${tokens.length} tokens`);
+        } catch (err) {
+          console.error(`[verifyToken] Failed to unbundle compact format: ${err.message}`);
+          tokens = [token]; // Fall back to treating as single token
+        }
+      } else if (isStandardFormat) {
+        console.log('[verifyToken] Trying to unbundle as standard format');
         try {
           tokens = tokenEncoder.unbundleTokens(token);
           isBundled = true;
           console.log(`[verifyToken] Successfully unbundled as standard format: ${tokens.length} tokens`);
-        } catch (standardError) {
-          console.log(`[verifyToken] Standard unbundling failed: ${standardError.message}`);
-          // Not a bundle, treat as single token
-          console.log(`[verifyToken] Not a bundle, treating as single token`);
-          tokens = [token];
+        } catch (err) {
+          console.error(`[verifyToken] Failed to unbundle standard format: ${err.message}`);
+          tokens = [token]; // Fall back to treating as single token
+        }
+      } else if (isIndividualToken) {
+        console.log('[verifyToken] Detected individual token format');
+        tokens = [token];
+      } else {
+        // Unknown format - try all unbundling methods in sequence
+        console.log('[verifyToken] Unknown token format, trying all unbundling methods');
+        try {
+          tokens = compactTokenEncoder.unbundleTokensCompact(token);
+          isBundled = true;
+          console.log(`[verifyToken] Successfully unbundled as compact format: ${tokens.length} tokens`);
+        } catch (compactError) {
+          try {
+            tokens = tokenEncoder.unbundleTokens(token);
+            isBundled = true;
+            console.log(`[verifyToken] Successfully unbundled as standard format: ${tokens.length} tokens`);
+          } catch (standardError) {
+            console.log(`[verifyToken] All unbundling methods failed, treating as single token`);
+            tokens = [token];
+          }
         }
       }
     } catch (error) {
@@ -401,32 +427,58 @@ async function redeemToken(req, res) {
     let tokens = [];
     let isBundled = false;
     
+    // Check what kind of token we're dealing with
+    console.log(`[redeemToken] Examining token format: ${token.substring(0, 30)}...`);
+    
+    // Check if this looks like a compact bundle format (starts with prefix followed by CBOR data)
+    const isCompactFormat = token.match(/^[a-zA-Z0-9]+oWF/);
+    // Check if this looks like a standard bundle format (starts with prefix followed by base64)
+    const isStandardFormat = token.match(/^[a-zA-Z0-9]+oWZ/);
+    // Check if this looks like an individual token (contains underscore)
+    const isIndividualToken = token.includes('_');
+    
+    console.log(`[redeemToken] Token format detection: compact=${!!isCompactFormat}, standard=${!!isStandardFormat}, individual=${isIndividualToken}`);
+    
     try {
-      // Check if token has a custom prefix (e.g., btcpins)
-      const hasCustomPrefix = 
-        token.startsWith('btcpins') || 
-        token.startsWith('GM') || 
-        token.startsWith(config.token.prefix);
-      
-      console.log(`[redeemToken] Token has ${hasCustomPrefix ? 'custom prefix' : 'no prefix'}`);
-      
-      // Try compact format first as it's more likely with custom prefixes
-      try {
-        tokens = compactTokenEncoder.unbundleTokensCompact(token);
-        isBundled = true;
-        console.log(`[redeemToken] Successfully unbundled as compact format: ${tokens.length} tokens`);
-      } catch (compactError) {
-        console.log(`[redeemToken] Compact unbundling failed: ${compactError.message}`);
-        // If compact unbundling fails, try standard
+      if (isCompactFormat) {
+        console.log('[redeemToken] Trying to unbundle as compact format');
+        try {
+          tokens = compactTokenEncoder.unbundleTokensCompact(token);
+          isBundled = true;
+          console.log(`[redeemToken] Successfully unbundled as compact format: ${tokens.length} tokens`);
+        } catch (err) {
+          console.error(`[redeemToken] Failed to unbundle compact format: ${err.message}`);
+          tokens = [token]; // Fall back to treating as single token
+        }
+      } else if (isStandardFormat) {
+        console.log('[redeemToken] Trying to unbundle as standard format');
         try {
           tokens = tokenEncoder.unbundleTokens(token);
           isBundled = true;
           console.log(`[redeemToken] Successfully unbundled as standard format: ${tokens.length} tokens`);
-        } catch (standardError) {
-          console.log(`[redeemToken] Standard unbundling failed: ${standardError.message}`);
-          // Not a bundle, treat as single token
-          console.log(`[redeemToken] Not a bundle, treating as single token`);
-          tokens = [token];
+        } catch (err) {
+          console.error(`[redeemToken] Failed to unbundle standard format: ${err.message}`);
+          tokens = [token]; // Fall back to treating as single token
+        }
+      } else if (isIndividualToken) {
+        console.log('[redeemToken] Detected individual token format');
+        tokens = [token];
+      } else {
+        // Unknown format - try all unbundling methods in sequence
+        console.log('[redeemToken] Unknown token format, trying all unbundling methods');
+        try {
+          tokens = compactTokenEncoder.unbundleTokensCompact(token);
+          isBundled = true;
+          console.log(`[redeemToken] Successfully unbundled as compact format: ${tokens.length} tokens`);
+        } catch (compactError) {
+          try {
+            tokens = tokenEncoder.unbundleTokens(token);
+            isBundled = true;
+            console.log(`[redeemToken] Successfully unbundled as standard format: ${tokens.length} tokens`);
+          } catch (standardError) {
+            console.log(`[redeemToken] All unbundling methods failed, treating as single token`);
+            tokens = [token];
+          }
         }
       }
     } catch (error) {
