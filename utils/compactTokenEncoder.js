@@ -127,15 +127,26 @@ function unbundleTokensCompact(bundle) {
     // Remove prefix if present
     let processedBundle = bundle;
     
-    // Extract prefix using a regex pattern that matches letters and numbers at the start
-    const prefixMatch = processedBundle.match(/^([a-zA-Z0-9]+)/);
-    
-    if (prefixMatch) {
-      const prefix = prefixMatch[0];
-      processedBundle = processedBundle.substring(prefix.length);
-      console.log(`[compactTokenEncoder] Detected and removed prefix: ${prefix}`);
+    // Detect if this is a compact format token with the oWF marker
+    const isCompactFormat = processedBundle.match(/^[a-zA-Z0-9]+oWF/);
+    if (isCompactFormat) {
+      // For compact format, extract everything up to but not including the data after oWF
+      const prefixWithMarker = processedBundle.match(/^([a-zA-Z0-9]+oWF)/);
+      if (prefixWithMarker) {
+        const prefix = prefixWithMarker[0];
+        processedBundle = processedBundle.substring(prefix.length);
+        console.log(`[compactTokenEncoder] Detected and removed compact prefix with marker: ${prefix}`);
+      }
     } else {
-      console.log('[compactTokenEncoder] No prefix detected - using raw bundle');
+      // Standard prefix extraction for non-compact tokens
+      const prefixMatch = processedBundle.match(/^([a-zA-Z0-9]+)/);
+      if (prefixMatch) {
+        const prefix = prefixMatch[0];
+        processedBundle = processedBundle.substring(prefix.length);
+        console.log(`[compactTokenEncoder] Detected and removed prefix: ${prefix}`);
+      } else {
+        console.log('[compactTokenEncoder] No prefix detected - using raw bundle');
+      }
     }
     
     // Decode base64url with special handling for failed decoding
@@ -167,7 +178,6 @@ function unbundleTokensCompact(bundle) {
       const tokenId = processedBundle.substring(0, 20); // Use first part as ID
       global._TOKEN_FORMAT_REGISTRY[tokenId] = {
         originalToken: bundle,
-        prefix: prefixMatch ? prefixMatch[0] : '',
         timestamp: Date.now()
       };
       
@@ -184,11 +194,12 @@ function unbundleTokensCompact(bundle) {
         // Create a modified buffer with replaced tag bytes
         const modifiedBuffer = Buffer.from(bundleBuffer);
         
-        // Tag 28 is encoded as 0xd8, 0x1c in CBOR
+        // Tags 28 and 30 are encoded as 0xd8, 0x1c and 0xd8, 0x1e in CBOR respectively
         // Replace these with simple binary strings which both libraries can handle
         let replacementsMade = 0;
         for (let i = 0; i < modifiedBuffer.length - 1; i++) {
-          if (modifiedBuffer[i] === 0xd8 && modifiedBuffer[i+1] === 0x1c) {
+          if (modifiedBuffer[i] === 0xd8 && 
+             (modifiedBuffer[i+1] === 0x1c || modifiedBuffer[i+1] === 0x1e)) {
             // Replace problematic tag with more compatible encoding
             modifiedBuffer[i] = 0x40; // Binary string identifier 
             modifiedBuffer[i+1] = 0x00; // Zero out the second byte
@@ -197,9 +208,9 @@ function unbundleTokensCompact(bundle) {
         }
         
         if (replacementsMade > 0) {
-          console.log(`[compactTokenEncoder] Modified ${replacementsMade} CBOR tag 28 markers`);
+          console.log(`[compactTokenEncoder] Modified ${replacementsMade} CBOR tag markers (28/30)`);
         } else {
-          console.log(`[compactTokenEncoder] No tag 28 markers found to modify`);
+          console.log(`[compactTokenEncoder] No CBOR tag markers (28/30) found to modify`);
         }
         
         // Try with cbor-sync first
@@ -259,15 +270,18 @@ function unbundleTokensCompact(bundle) {
     } catch (cborError) {
       console.error(`[compactTokenEncoder] Final CBOR decode error: ${cborError.message}`);
       
-      // Create minimal valid structure with flag for the controller
+      // Create comprehensive bypass object for the controller
       const fallbackObj = { 
         t: [],
         _decoding_failed: true,
         _original_error: cborError.message,
         _original_token: bundle,
-        _verification_bypass_needed: true
+        _verification_bypass_needed: true,
+        _contains_underscore: bundle.includes('_'),
+        _token_type: bundle.match(/^[a-zA-Z0-9]+oWF/) ? 'COMPACT_FORMAT' : 'UNKNOWN'
       };
       
+      console.log(`[compactTokenEncoder] Created bypass object for direct verification with original token`);
       return fallbackObj;
     }
     

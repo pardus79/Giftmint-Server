@@ -55,3 +55,7 @@ coverage
 
 # OS specific
 .DS_Store
+
+# Diagnostic scripts
+test/demo/fixBtcpinsToken.js
+test/demo/testTokenFix.js
