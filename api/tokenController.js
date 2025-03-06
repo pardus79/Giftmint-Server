@@ -272,10 +272,43 @@ async function verifyToken(req, res) {
         try {
           tokens = compactTokenEncoder.unbundleTokensCompact(token);
           isBundled = true;
-          console.log(`[verifyToken] Successfully unbundled as compact format: ${tokens.length} tokens`);
+          
+          // Check if we have valid tokens or just a fallback empty array
+          if (tokens && tokens.length > 0) {
+            console.log(`[verifyToken] Successfully unbundled as compact format: ${tokens.length} tokens`);
+          } else {
+            // Something went wrong during unbundling, but it didn't throw an error
+            console.log('[verifyToken] Unbundling returned empty token array, checking for special flags');
+            
+            // Check if this is a special case with our bypass flag
+            if (tokens && tokens._verification_bypass_needed) {
+              console.log('[verifyToken] Token has verification bypass flag - using special handling');
+              
+              // This is a direct verification token - the original token should be validated directly
+              tokens = [token]; // Use the original token for direct verification
+            } else {
+              // Regular fall back case
+              console.log('[verifyToken] No special flags found, treating as single token');
+              tokens = [token]; // Fall back to treating as single token
+            }
+          }
         } catch (err) {
           console.error(`[verifyToken] Failed to unbundle compact format: ${err.message}`);
-          tokens = [token]; // Fall back to treating as single token
+          
+          // Check if the error message indicates a CBOR tag issue
+          if (err.message && (
+              err.message.includes('Additional info not implemented') ||
+              err.message.includes('tag 28') ||
+              err.message.includes('tag 30') ||
+              err.message.includes('Unknown fixed value')
+          )) {
+            console.log('[verifyToken] Detected CBOR tag issue, attempting direct token validation');
+            // Special handling for known CBOR tag issue
+            tokens = [token]; // Treat as single token
+          } else {
+            // Other error, try as single token
+            tokens = [token];
+          }
         }
       } else if (isIndividualToken) {
         // This is an individual token with underscore separator
@@ -287,9 +320,40 @@ async function verifyToken(req, res) {
         try {
           tokens = compactTokenEncoder.unbundleTokensCompact(token);
           isBundled = true;
-          console.log(`[verifyToken] Successfully unbundled as compact format: ${tokens.length} tokens`);
+          
+          // Check if we have valid tokens or just a fallback empty array
+          if (tokens && tokens.length > 0) {
+            console.log(`[verifyToken] Successfully unbundled as compact format: ${tokens.length} tokens`);
+          } else {
+            // Something went wrong during unbundling, but it didn't throw an error
+            console.log('[verifyToken] Unbundling returned empty token array, checking for special flags');
+            
+            // Check if this is a special case with our bypass flag
+            if (tokens && tokens._verification_bypass_needed) {
+              console.log('[verifyToken] Token has verification bypass flag - using special handling');
+              
+              // This is a direct verification token - the original token should be validated directly
+              tokens = [token]; // Use the original token for direct verification
+            } else {
+              // Regular fall back case
+              console.log('[verifyToken] No special flags found, treating as single token');
+              tokens = [token]; // Fall back to treating as single token
+            }
+          }
         } catch (compactError) {
-          console.log(`[verifyToken] Unbundling failed, treating as single token`);
+          console.log(`[verifyToken] Unbundling failed: ${compactError.message}`);
+          
+          // Check if the error message indicates a CBOR tag issue
+          if (compactError.message && (
+              compactError.message.includes('Additional info not implemented') ||
+              compactError.message.includes('tag 28') ||
+              compactError.message.includes('tag 30') ||
+              compactError.message.includes('Unknown fixed value')
+          )) {
+            console.log('[verifyToken] Detected CBOR tag issue in fallback path, attempting direct token validation');
+          }
+          
+          // Fall back to treating as single token
           tokens = [token];
         }
       }

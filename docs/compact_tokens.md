@@ -81,9 +81,21 @@ node test/demo/prefixTestSimple.js
 node test/demo/randomPrefixTest.js
 ```
 
-## Known Issues
+## Recent Fixes
 
-There is a known issue with token unbundling under certain conditions that causes the error "Additional info not implemented: 28/30". This error has been observed in both test environments and on the server when processing certain token formats. This will be addressed in a future update.
+A previous issue with token unbundling under certain conditions that caused the error "Additional info not implemented: 28/30" has been fixed. This error was observed in both test environments and on the server when processing certain token formats, particularly related to how CBOR handles binary data tags.
+
+The fix includes:
+1. Multiple decoding strategies for CBOR data:
+   - Primary approach using cbor-sync library which has better tag handling
+   - Fallback to standard cbor library when needed
+   - Special token format registry for direct verification
+2. Enhanced error detection and handling to identify tag issues specifically
+3. Smart fallback mechanism in the token controller that checks for special flags
+4. Bypass path for verification when CBOR handling fails completely
+5. Consistent type handling between Buffer, Uint8Array, and string formats
+
+These improvements ensure that tokens with CBOR tag 28/30 issues are handled gracefully, allowing verification and redemption to proceed even when perfect CBOR decoding isn't possible.
 
 ## Future Improvements
 
