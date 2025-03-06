@@ -94,29 +94,15 @@ function unbundleTokensCompact(bundle) {
     // Remove prefix if present
     let processedBundle = bundle;
     
-    // Create a list of prefixes to try
-    const prefixesToTry = [
-      config.token.prefix,
-      'GM',
-      'btcpins', 
-      'giftmint',
-      'TEST'
-    ];
-
-    // Try to remove prefix
-    let foundPrefix = false;
-    for (const prefix of prefixesToTry) {
-      if (processedBundle.startsWith(prefix)) {
-        processedBundle = processedBundle.substring(prefix.length);
-        console.log(`[compactTokenEncoder] Removed prefix: ${prefix}`);
-        foundPrefix = true;
-        break;
-      }
-    }
+    // Extract prefix using a regex pattern that matches letters and numbers at the start
+    const prefixMatch = processedBundle.match(/^([a-zA-Z0-9]+)/);
     
-    // If no prefix was found, assume there isn't one
-    if (!foundPrefix) {
-      console.log('[compactTokenEncoder] No recognized prefix found - assuming raw bundle');
+    if (prefixMatch) {
+      const prefix = prefixMatch[0];
+      processedBundle = processedBundle.substring(prefix.length);
+      console.log(`[compactTokenEncoder] Detected and removed prefix: ${prefix}`);
+    } else {
+      console.log('[compactTokenEncoder] No prefix detected - using raw bundle');
     }
     
     // Decode base64url

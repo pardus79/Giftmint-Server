@@ -48,30 +48,17 @@ function encodeToken(token) {
  * @returns {Object} The decoded token
  */
 function decodeToken(encodedToken) {
-  // Check if token has a recognized prefix
-  // Create a list of prefixes to try (with underscore suffix)
-  const prefixesToTry = [
-    `${config.token.prefix}_`,
-    'GM_',
-    'btcpins_',
-    'giftmint_',
-    'TEST_'
-  ];
+  // Check if the token has a prefix pattern (any letters followed by underscore)
+  const prefixMatch = encodedToken.match(/^([a-zA-Z0-9]+)_/);
   
   let tokenBase64;
-  let foundPrefix = false;
-  
-  // Try each prefix
-  for (const prefix of prefixesToTry) {
-    if (encodedToken.startsWith(prefix)) {
-      tokenBase64 = encodedToken.substring(prefix.length);
-      foundPrefix = true;
-      break;
-    }
-  }
-  
-  if (!foundPrefix) {
-    throw new Error(`Invalid token. Expected recognized prefix`);
+  if (prefixMatch) {
+    // Extract the prefix and the base64 part
+    const prefix = prefixMatch[0]; // includes the underscore
+    tokenBase64 = encodedToken.substring(prefix.length);
+    console.log(`Detected prefix: ${prefix.slice(0, -1)}`);
+  } else {
+    throw new Error(`Invalid token format. Missing prefix separator '_'`);
   }
   
   // Decode base64
@@ -177,31 +164,18 @@ function bundleTokens(tokens, customPrefix) {
  */
 function unbundleTokens(bundle) {
   try {
-    // Remove the prefix if present
+    // Remove prefix if present
     let processedBundle = bundle;
     
-    // Create a list of prefixes to try
-    const prefixesToTry = [
-      config.token.prefix,
-      'GM',
-      'btcpins', 
-      'giftmint',
-      'TEST'
-    ];
-
-    // Try to remove prefix
-    let foundPrefix = false;
-    for (const prefix of prefixesToTry) {
-      if (processedBundle.startsWith(prefix)) {
-        processedBundle = processedBundle.substring(prefix.length);
-        foundPrefix = true;
-        break;
-      }
-    }
+    // Extract prefix using a regex pattern that matches letters and numbers at the start
+    const prefixMatch = processedBundle.match(/^([a-zA-Z0-9]+)/);
     
-    // If no prefix was found, assume there isn't one
-    if (!foundPrefix) {
-      console.log('[unbundleTokens] No recognized prefix found - assuming raw bundle');
+    if (prefixMatch) {
+      const prefix = prefixMatch[0];
+      processedBundle = processedBundle.substring(prefix.length);
+      console.log(`[unbundleTokens] Detected and removed prefix: ${prefix}`);
+    } else {
+      console.log('[unbundleTokens] No prefix detected - using raw bundle');
     }
     
     // Decode base64
