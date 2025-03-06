@@ -281,24 +281,34 @@ async function verifyToken(req, res) {
           tokens = compactTokenEncoder.unbundleTokensCompact(token);
           isBundled = true;
           
-          // Check if we have valid tokens or just a fallback empty array
-          if (tokens && tokens.length > 0) {
+          // Check if the result is an array of tokens or an object with metadata
+          if (Array.isArray(tokens) && tokens.length > 0) {
             console.log(`[verifyToken] Successfully unbundled as compact format: ${tokens.length} tokens`);
-          } else {
-            // Something went wrong during unbundling, but it didn't throw an error
-            console.log('[verifyToken] Unbundling returned empty token array, checking for special flags');
+          } else if (tokens && typeof tokens === 'object') {
+            console.log('[verifyToken] Receiving specialized token object from unbundling');
             
-            // Check if this is a special case with our bypass flag
-            if (tokens && tokens._verification_bypass_needed) {
+            // Check if this is a specialized bypass object 
+            if (tokens._verification_bypass_needed) {
               console.log('[verifyToken] Token has verification bypass flag - using special handling');
+              if (tokens._original_error) {
+                console.log(`[verifyToken] Original error: ${tokens._original_error}`);
+              }
               
-              // This is a direct verification token - the original token should be validated directly
-              tokens = [token]; // Use the original token for direct verification
+              // Use the original token for direct verification
+              tokens = [token];
+            } else if (tokens.t && Array.isArray(tokens.t)) {
+              // We got a bundle object but no extracted tokens
+              console.log(`[verifyToken] Got bundle with ${tokens.t.length} token groups but no extracted tokens`);
+              tokens = [token];
             } else {
-              // Regular fall back case
-              console.log('[verifyToken] No special flags found, treating as single token');
-              tokens = [token]; // Fall back to treating as single token
+              // Unknown object type
+              console.log('[verifyToken] Received unknown object type, treating as single token');
+              tokens = [token];
             }
+          } else {
+            // Empty array or other non-object value
+            console.log('[verifyToken] Unbundling returned empty result, treating as single token');
+            tokens = [token]; 
           }
         } catch (err) {
           console.error(`[verifyToken] Failed to unbundle compact format: ${err.message}`);
@@ -329,24 +339,34 @@ async function verifyToken(req, res) {
           tokens = compactTokenEncoder.unbundleTokensCompact(token);
           isBundled = true;
           
-          // Check if we have valid tokens or just a fallback empty array
-          if (tokens && tokens.length > 0) {
+          // Check if the result is an array of tokens or an object with metadata
+          if (Array.isArray(tokens) && tokens.length > 0) {
             console.log(`[verifyToken] Successfully unbundled as compact format: ${tokens.length} tokens`);
-          } else {
-            // Something went wrong during unbundling, but it didn't throw an error
-            console.log('[verifyToken] Unbundling returned empty token array, checking for special flags');
+          } else if (tokens && typeof tokens === 'object') {
+            console.log('[verifyToken] Receiving specialized token object from unbundling');
             
-            // Check if this is a special case with our bypass flag
-            if (tokens && tokens._verification_bypass_needed) {
+            // Check if this is a specialized bypass object 
+            if (tokens._verification_bypass_needed) {
               console.log('[verifyToken] Token has verification bypass flag - using special handling');
+              if (tokens._original_error) {
+                console.log(`[verifyToken] Original error: ${tokens._original_error}`);
+              }
               
-              // This is a direct verification token - the original token should be validated directly
-              tokens = [token]; // Use the original token for direct verification
+              // Use the original token for direct verification
+              tokens = [token];
+            } else if (tokens.t && Array.isArray(tokens.t)) {
+              // We got a bundle object but no extracted tokens
+              console.log(`[verifyToken] Got bundle with ${tokens.t.length} token groups but no extracted tokens`);
+              tokens = [token];
             } else {
-              // Regular fall back case
-              console.log('[verifyToken] No special flags found, treating as single token');
-              tokens = [token]; // Fall back to treating as single token
+              // Unknown object type
+              console.log('[verifyToken] Received unknown object type, treating as single token');
+              tokens = [token];
             }
+          } else {
+            // Empty array or other non-object value
+            console.log('[verifyToken] Unbundling returned empty result, treating as single token');
+            tokens = [token]; 
           }
         } catch (compactError) {
           console.log(`[verifyToken] Unbundling failed: ${compactError.message}`);
@@ -505,7 +525,36 @@ async function redeemToken(req, res) {
         try {
           tokens = compactTokenEncoder.unbundleTokensCompact(token);
           isBundled = true;
-          console.log(`[redeemToken] Successfully unbundled as compact format: ${tokens.length} tokens`);
+          
+          // Check if the result is an array of tokens or an object with metadata
+          if (Array.isArray(tokens) && tokens.length > 0) {
+            console.log(`[redeemToken] Successfully unbundled as compact format: ${tokens.length} tokens`);
+          } else if (tokens && typeof tokens === 'object') {
+            console.log('[redeemToken] Receiving specialized token object from unbundling');
+            
+            // Check if this is a specialized bypass object 
+            if (tokens._verification_bypass_needed) {
+              console.log('[redeemToken] Token has verification bypass flag - using special handling');
+              if (tokens._original_error) {
+                console.log(`[redeemToken] Original error: ${tokens._original_error}`);
+              }
+              
+              // Use the original token for direct verification
+              tokens = [token];
+            } else if (tokens.t && Array.isArray(tokens.t)) {
+              // We got a bundle object but no extracted tokens
+              console.log(`[redeemToken] Got bundle with ${tokens.t.length} token groups but no extracted tokens`);
+              tokens = [token];
+            } else {
+              // Unknown object type
+              console.log('[redeemToken] Received unknown object type, treating as single token');
+              tokens = [token];
+            }
+          } else {
+            // Empty array or other non-object value
+            console.log('[redeemToken] Unbundling returned empty result, treating as single token');
+            tokens = [token]; 
+          }
         } catch (err) {
           console.error(`[redeemToken] Failed to unbundle compact format: ${err.message}`);
           tokens = [token]; // Fall back to treating as single token
@@ -520,9 +569,38 @@ async function redeemToken(req, res) {
         try {
           tokens = compactTokenEncoder.unbundleTokensCompact(token);
           isBundled = true;
-          console.log(`[redeemToken] Successfully unbundled as compact format: ${tokens.length} tokens`);
+          
+          // Check if the result is an array of tokens or an object with metadata
+          if (Array.isArray(tokens) && tokens.length > 0) {
+            console.log(`[redeemToken] Successfully unbundled as compact format: ${tokens.length} tokens`);
+          } else if (tokens && typeof tokens === 'object') {
+            console.log('[redeemToken] Receiving specialized token object from unbundling');
+            
+            // Check if this is a specialized bypass object 
+            if (tokens._verification_bypass_needed) {
+              console.log('[redeemToken] Token has verification bypass flag - using special handling');
+              if (tokens._original_error) {
+                console.log(`[redeemToken] Original error: ${tokens._original_error}`);
+              }
+              
+              // Use the original token for direct verification
+              tokens = [token];
+            } else if (tokens.t && Array.isArray(tokens.t)) {
+              // We got a bundle object but no extracted tokens
+              console.log(`[redeemToken] Got bundle with ${tokens.t.length} token groups but no extracted tokens`);
+              tokens = [token];
+            } else {
+              // Unknown object type
+              console.log('[redeemToken] Received unknown object type, treating as single token');
+              tokens = [token];
+            }
+          } else {
+            // Empty array or other non-object value
+            console.log('[redeemToken] Unbundling returned empty result, treating as single token');
+            tokens = [token]; 
+          }
         } catch (compactError) {
-          console.log(`[redeemToken] Unbundling failed, treating as single token`);
+          console.log(`[redeemToken] Unbundling failed: ${compactError.message}`);
           tokens = [token];
         }
       }

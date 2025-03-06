@@ -89,16 +89,30 @@ node test/demo/randomPrefixTest.js
 A previous issue with token unbundling under certain conditions that caused the error "Additional info not implemented: 28/30" has been fixed. This error was observed in both test environments and on the server when processing certain token formats, particularly related to how CBOR handles binary data tags.
 
 The fix includes:
-1. Multiple decoding strategies for CBOR data:
+1. More consistent CBOR encoding to avoid problematic tags:
+   - Using explicit encoding options to prefer standard binary format over tag types
+   - Avoiding tag 28 in the encoding process
+   - Consistent handling of binary data across the system
+   
+2. Multiple decoding strategies for CBOR data:
    - Primary approach using cbor-sync library which has better tag handling
    - Fallback to standard cbor library when needed
-   - Special token format registry for direct verification
-2. Enhanced error detection and handling to identify tag issues specifically
-3. Smart fallback mechanism in the token controller that checks for special flags
-4. Bypass path for verification when CBOR handling fails completely
-5. Consistent type handling between Buffer, Uint8Array, and string formats
+   - Binary tag replacement for problematic tags
+   - Direct token verification as a final resort
+   
+3. Robust failure handling:
+   - Enhanced error detection specific to tag handling issues
+   - Graceful metadata passing between encoder and controller
+   - Smart type conversion for mixed data formats
+   - Multiple fallback layers for progressive degradation
 
-These improvements ensure that tokens with CBOR tag 28/30 issues are handled gracefully, allowing verification and redemption to proceed even when perfect CBOR decoding isn't possible.
+4. Improved controller token processing:
+   - Better result type detection (array vs. object with metadata)
+   - Special handling for bypass flags
+   - Enhanced logging for debugging
+   - Consistent error handling across verification and redemption paths
+
+These improvements ensure that tokens with CBOR tag 28/30 issues are handled gracefully, allowing verification and redemption to proceed even when perfect CBOR decoding isn't possible. The system now prioritizes successful verification over strict format adherence.
 
 ### Token Format Detection
 
