@@ -43,12 +43,13 @@ Compact bundling is the only supported format in the tokenController. The system
 
 ### Token Format Detection
 
-The system uses the following characteristics to determine token format:
+The system uses the following characteristics to determine token format, with a clear priority order:
 
-1. **Compact bundle format**: Tokens starting with an alphanumeric prefix followed by the CBOR pattern marker `oWF`
-2. **Individual token format**: Tokens containing an underscore separator between the prefix and the data
+1. **Compact bundle format** (highest priority): Tokens starting with an alphanumeric prefix followed by the CBOR pattern marker `oWF`
+2. **Standard bundle format** (medium priority): Tokens starting with the legacy bundle marker pattern
+3. **Individual token format** (lowest priority): Tokens containing an underscore separator between the prefix and the data, but only when they don't match the higher priority bundle formats
 
-This format detection enables the system to automatically handle different token types without explicit format specification.
+This prioritized format detection enables the system to correctly handle different token types without explicit format specification, even when tokens contain markers that would match multiple formats (such as CBOR bundles that contain underscores in their data).
 
 ## Size Comparison
 
@@ -83,6 +84,8 @@ node test/demo/randomPrefixTest.js
 
 ## Recent Fixes
 
+### CBOR Tag Handling
+
 A previous issue with token unbundling under certain conditions that caused the error "Additional info not implemented: 28/30" has been fixed. This error was observed in both test environments and on the server when processing certain token formats, particularly related to how CBOR handles binary data tags.
 
 The fix includes:
@@ -96,6 +99,16 @@ The fix includes:
 5. Consistent type handling between Buffer, Uint8Array, and string formats
 
 These improvements ensure that tokens with CBOR tag 28/30 issues are handled gracefully, allowing verification and redemption to proceed even when perfect CBOR decoding isn't possible.
+
+### Token Format Detection
+
+Fixed an issue with token format detection when tokens contain both CBOR markers and underscore characters. The system now prioritizes the detection logic in the following order:
+
+1. First check for compact bundle format (CBOR pattern marker)
+2. Then check for standard bundle format (legacy format)
+3. Only consider tokens as individual format if they don't match either bundle format
+
+This prioritization ensures that CBOR bundles that happen to contain underscores in their data are correctly identified as bundles rather than being misidentified as individual tokens.
 
 ## Future Improvements
 

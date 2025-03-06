@@ -259,11 +259,19 @@ async function verifyToken(req, res) {
     console.log(`[verifyToken] Examining token format: ${token.substring(0, 30)}...`);
     
     // Check if this looks like a compact bundle format (starts with prefix followed by CBOR data)
+    // This is our primary detection method
     const isCompactFormat = token.match(/^[a-zA-Z0-9]+oWF/);
-    // Check if this looks like an individual token (contains underscore)
-    const isIndividualToken = token.includes('_');
     
-    console.log(`[verifyToken] Token format detection: compact=${!!isCompactFormat}, individual=${isIndividualToken}`);
+    // Check if this looks like an individual token (contains underscore)
+    // Note: Some CBOR bundles may contain underscores in their data, so this is not a reliable
+    // indicator on its own when we also detect CBOR markers
+    const hasUnderscore = token.includes('_');
+    
+    // An individual token is defined as having an underscore ONLY when it doesn't have CBOR markers
+    // This prioritizes CBOR detection over underscore detection
+    const isIndividualToken = hasUnderscore && !isCompactFormat;
+    
+    console.log(`[verifyToken] Token format detection: compact=${!!isCompactFormat}, hasUnderscore=${hasUnderscore}, individual=${isIndividualToken}`);
     
     try {
       if (isCompactFormat) {
@@ -476,11 +484,19 @@ async function redeemToken(req, res) {
     console.log(`[redeemToken] Examining token format: ${token.substring(0, 30)}...`);
     
     // Check if this looks like a compact bundle format (starts with prefix followed by CBOR data)
+    // This is our primary detection method
     const isCompactFormat = token.match(/^[a-zA-Z0-9]+oWF/);
-    // Check if this looks like an individual token (contains underscore)
-    const isIndividualToken = token.includes('_');
     
-    console.log(`[redeemToken] Token format detection: compact=${!!isCompactFormat}, individual=${isIndividualToken}`);
+    // Check if this looks like an individual token (contains underscore)
+    // Note: Some CBOR bundles may contain underscores in their data, so this is not a reliable
+    // indicator on its own when we also detect CBOR markers
+    const hasUnderscore = token.includes('_');
+    
+    // An individual token is defined as having an underscore ONLY when it doesn't have CBOR markers
+    // This prioritizes CBOR detection over underscore detection
+    const isIndividualToken = hasUnderscore && !isCompactFormat;
+    
+    console.log(`[redeemToken] Token format detection: compact=${!!isCompactFormat}, hasUnderscore=${hasUnderscore}, individual=${isIndividualToken}`);
     
     try {
       if (isCompactFormat) {

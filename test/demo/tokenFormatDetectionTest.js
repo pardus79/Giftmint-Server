@@ -16,7 +16,11 @@ const sampleTokens = {
   compactBundle: "btcpinsoWF0gaJhaVBFyYNG_NuFVRi8FghOjAQCYXCBo2FhAmFzeEBkZjUwYTRiMDcxNDY1M2JkMjFiMGZjNWMxNWYyMzU1MmY3NmE4YzdlMzZhMDc3YmY0ZmIyMDhmMWQ1OWNjNWY3YWNYQZ6SbLw5_3iUFF5orsCFjdNYN8YyEHJm3G1t6eFtHYT0Y6QV2tS9jTfQM6PcwrHk4bOq_nNvN9OiIXbTkrL1tmYB",
   
   // Standard bundle (no underscore, starts with prefix+oWZ)
-  standardBundle: "btcpinsoWZ0b2tlbnOheCAxMjM0NTY3ODkwYWJjZGVmMTIzNDU2Nzg5MGFiY2RlZoOjYWQZA"
+  standardBundle: "btcpinsoWZ0b2tlbnOheCAxMjM0NTY3ODkwYWJjZGVmMTIzNDU2Nzg5MGFiY2RlZoOjYWQZA",
+  
+  // Hybrid token (has both compact format marker AND underscores)
+  // This simulates the real-world token that was causing issues
+  hybridToken: "btcpinsoWF0gaJhaVBFyYNG_NuFVRi8FghOjAQCYXCBo2FhAmFzeEA0YjcxN2UyMDgwN2ZlNWJiZTc1ODk5NGQyMTdiMjU2ODVlODJiMjk0MmMzNjI0YTg5NmZlOTI5MzkxMTI4OGVmYWNYQdnwLNYei_MVmvtn3AAQg8q-Geh1zk9q6L_v6FXjSBXcSWOLJDaaEVHVqe4uW-RMXBdIdvLvUsKem9VmMCQFn_MB"
 };
 
 // Run the tests
@@ -42,13 +46,14 @@ function testFormatDetection(token, name) {
   // Determine format based on detection (with priority)
   let detectedFormat = '';
   if (isCompactFormat) {
-    // Compact format has highest priority
+    // Compact format has highest priority, even if token also has underscore
     detectedFormat = 'COMPACT BUNDLE';
   } else if (isStandardFormat) {
     // Standard bundle format has second priority
     detectedFormat = 'STANDARD BUNDLE';
   } else if (isIndividualToken) {
-    // Individual token detection has lowest priority
+    // Individual token detection has lowest priority and only applies when
+    // not already identified as a bundle format
     detectedFormat = 'INDIVIDUAL TOKEN';
   } else {
     detectedFormat = 'UNKNOWN FORMAT';
@@ -80,7 +85,8 @@ let allTestsPassed = true;
 const expected = {
   standardIndividual: 'INDIVIDUAL TOKEN',
   compactBundle: 'COMPACT BUNDLE',
-  standardBundle: 'STANDARD BUNDLE'
+  standardBundle: 'STANDARD BUNDLE',
+  hybridToken: 'COMPACT BUNDLE'  // Should detect as compact bundle even though it has underscores
 };
 
 for (const [name, result] of Object.entries(results)) {
